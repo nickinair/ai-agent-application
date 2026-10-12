@@ -35,3 +35,7 @@ npm run typecheck
 | 规则包 / 参数模板与导入脚本、热更新 | H4 |
 | 知识库导入脚本 | N7 |
 | 管理 API：会话查询、转人工记录、成员角色修正（`/api/admin`，JWT） | P1-2 |
+
+## GitLab 流水线与部署
+
+最终部署走 GitLab（`.gitlab-ci.yml`）：任意分支跑测试；合并到 `main` 构建镜像并自动部署测试环境；打 `v*` 标签后手动部署生产。部署失败会自动回滚到上一个版本。迁移步骤、需要配置的变量和服务器准备见 `crm-ai-agent` 仓库的 `docs/GitLab迁移与部署.md`。`.github/workflows/` 只在 GitHub 过渡期使用。
