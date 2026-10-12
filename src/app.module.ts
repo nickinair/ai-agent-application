@@ -1,0 +1,10 @@
+import { Module } from '@nestjs/common';
+import { ENV, loadEnv } from './config/env';
+import { MysqlService } from './database/mysql.service';
+import { HealthController } from './health/health.controller';
+
+@Module({
+  controllers: [HealthController],
+  providers: [{ provide: ENV, useFactory: () => loadEnv() }, MysqlService],
+})
+export class AppModule {}
