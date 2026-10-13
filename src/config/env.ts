@@ -12,11 +12,6 @@ const EnvSchema = z
     JWT_SECRET: z.string().default('dev-only-secret-change-me-in-production!!'),
     /** 令牌有效期（秒），默认 8 小时 */
     JWT_TTL_SECONDS: z.coerce.number().int().positive().default(8 * 3600),
-  })
-  .superRefine((e, ctx) => {
-    if (e.NODE_ENV === 'production' && (e.JWT_SECRET.length < 32 || e.JWT_SECRET.startsWith('dev-only'))) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['JWT_SECRET'], message: '生产环境必须配置不少于 32 个字符的 JWT_SECRET' });
-    }
   });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -27,6 +22,13 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error(`环境变量校验失败：${parsed.error.message}`);
   }
   return parsed.data;
+}
+
+/** 管理 API 启动时检查（迁移、命令行不需要 JWT，不做这项检查）：生产环境必须配置足够长的 JWT 密钥 */
+export function assertApiSecrets(env: Env): void {
+  if (env.NODE_ENV === 'production' && (env.JWT_SECRET.length < 32 || env.JWT_SECRET.startsWith('dev-only'))) {
+    throw new Error('生产环境必须配置不少于 32 个字符的 JWT_SECRET');
+  }
 }
 
 export const ENV = Symbol('ENV');

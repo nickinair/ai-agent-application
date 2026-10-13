@@ -1,5 +1,5 @@
 import { checkPassword } from '../src/cli/admin';
-import { loadEnv } from '../src/config/env';
+import { assertApiSecrets, loadEnv } from '../src/config/env';
 import { signToken, verifyToken } from '../src/auth/jwt';
 import { LoginLimiter } from '../src/auth/login-limiter';
 
@@ -30,8 +30,9 @@ describe('鉴权', () => {
   });
 
   it('生产环境必须配置足够长的 JWT 密钥；账号密码强度', () => {
-    expect(() => loadEnv({ NODE_ENV: 'production' })).toThrow('JWT_SECRET');
-    expect(loadEnv({ NODE_ENV: 'production', JWT_SECRET: 'k'.repeat(40) }).JWT_SECRET).toHaveLength(40);
+    expect(() => assertApiSecrets(loadEnv({ NODE_ENV: 'production' }))).toThrow('JWT_SECRET');
+    expect(() => assertApiSecrets(loadEnv({ NODE_ENV: 'production', JWT_SECRET: 'k'.repeat(40) }))).not.toThrow();
+    expect(loadEnv({ NODE_ENV: 'production' }).MYSQL_URL).toBeDefined(); // 迁移不受影响
     expect(() => checkPassword('short1')).toThrow('至少 10 位');
     expect(() => checkPassword('onlyletterssss')).toThrow();
     expect(checkPassword('Agent2026pass')).toBe('Agent2026pass');
