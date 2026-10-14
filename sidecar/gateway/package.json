@@ -1,0 +1,45 @@
+{
+  "name": "a3-internal-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "a3 专属内部网关微服务：服务注册与发现中心、动态配置中心",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "dev": "ts-node src/main.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --runInBand",
+    "deploy:local": "./deploy.sh deploy local",
+    "deploy:test": "./deploy.sh deploy test",
+    "deploy:prod": "./deploy.sh deploy prod"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "ioredis": "^6.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.1.0",
+    "@types/ioredis": "^4.28.10",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/test"
+    ]
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
