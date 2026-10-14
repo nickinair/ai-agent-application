@@ -4,7 +4,7 @@
  * @reference 《智能体全能平台-V1.0.0-技术开发方案》 §5.3、§7.3、§11.3
  */
 
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ENV, type Env } from '../../config/env';
 import { MysqlService } from '../../database/mysql.service';
 import { RedisService } from '../../infra/redis/redis.service';
@@ -12,7 +12,10 @@ import { REDIS_KEYS } from '../../infra/redis/redis.keys';
 import { BufferService } from './buffer.service';
 import { TimerService } from './timer.service';
 import { SealerService } from './sealer.service';
-import type { InboundMessage } from '../../contracts';
+import { MicrophoneService } from './microphone.service';
+import { StateTransitionService } from './state-transition.service';
+import { CHANNEL_ADAPTER, type ChannelAdapter, type InboundMessage } from '../../contracts';
+import type { RowDataPacket } from 'mysql2/promise';
 
 export interface InboundProcessResult {
   status: 'PROCESSED' | 'IGNORED_DUPLICATE' | 'IGNORED_BOT' | 'STAFF_HANDLED';
@@ -25,6 +28,11 @@ export interface InboundProcessResult {
 export class InboundPipelineService {
   private readonly logger = new Logger(InboundPipelineService.name);
 
+  /**
+   * 在途组生成任务的中断控制器映射 (groupId -> AbortController)
+   */
+  private readonly abortControllers = new Map<string, AbortController>();
+
   constructor(
     @Inject(ENV) private readonly env: Env,
     private readonly mysqlService: MysqlService,
@@ -32,7 +40,38 @@ export class InboundPipelineService {
     private readonly bufferService: BufferService,
     private readonly timerService: TimerService,
     private readonly sealerService: SealerService,
+    @Optional() private readonly microphoneService?: MicrophoneService,
+    @Optional() private readonly stateTransitionService?: StateTransitionService,
+    @Optional() @Inject(CHANNEL_ADAPTER) private readonly channelAdapter?: ChannelAdapter,
   ) {}
+
+  /**
+   * 注册在途任务的 AbortController
+   */
+  registerAbortController(groupId: number | string, controller: AbortController): void {
+    this.abortControllers.set(String(groupId), controller);
+  }
+
+  /**
+   * 注销在途任务的 AbortController
+   */
+  unregisterAbortController(groupId: number | string): void {
+    this.abortControllers.delete(String(groupId));
+  }
+
+  /**
+   * 触发在途生成任务中断信号（尽力而为节省 LLM Token）
+   */
+  abortInflight(groupId: number | string): boolean {
+    const controller = this.abortControllers.get(String(groupId));
+    if (controller && !controller.signal.aborted) {
+      controller.abort();
+      this.abortControllers.delete(String(groupId));
+      this.logger.log(`🛑 [InflightAbort] 成功中断在途组 #${groupId} 的生成任务`);
+      return true;
+    }
+    return false;
+  }
 
   /**
    * 处理统一规范的入站消息（第 1 关「收」主入口）
@@ -55,6 +94,9 @@ export class InboundPipelineService {
 
     // 关联更新 message 表的 conversation_id
     await this.updateMessageConversationId(messageId, convId);
+
+    // 刷新会话普通空闲计时器（对齐技术方案 §7.3 timers.resetIdle(conv)）
+    await this.timerService?.scheduleIdle?.(convId, 'NORMAL');
 
     // 3. 身份识别分流（方案 §11.3）
     const role = msg.sender.role;
@@ -80,8 +122,34 @@ export class InboundPipelineService {
       return { status: 'STAFF_HANDLED', messageId, conversationId: convId };
     }
 
-    // ④ 外部客户消息（CUSTOMER）：进入缓冲池排队与双计时器调度
+    // ④ 外部客户消息（CUSTOMER）：检查话筒状态分流
     const senderId = msg.sender.channelUserId;
+    const micStatus = this.microphoneService
+      ? await this.microphoneService.getMicStatus(convId)
+      : { owner: 'BOT' as const, isHandoffLocked: false, epoch: 1 };
+
+    if (micStatus.owner === 'HUMAN') {
+      // 话筒在人工手中：客户消息照常进入缓冲池累积，但不触发 3s 静默自动封组回答
+      const meta = await this.bufferService.push(convId, senderId, messageId, msg.sentAt);
+      this.logger.log(
+        `📥 [话筒=HUMAN] 客户消息入缓冲池待人工处理: convId=${convId}, sender=${senderId}, count=${meta.count}`,
+      );
+
+      // 若未被主动转人工锁定，预约 60s 人工超时接回检查任务 (PRD §6.2、Task 3.5、S9 用例)
+      // 客户连发追加发言防重置：仅首条未回复消息 (meta.isFirst !== false) 进行调度
+      if (!micStatus.isHandoffLocked && meta.isFirst !== false) {
+        await this.timerService?.scheduleHumanWait?.(convId, senderId, micStatus.epoch);
+      }
+
+      return {
+        status: 'PROCESSED',
+        messageId,
+        conversationId: convId,
+        sealedDirectly: false,
+      };
+    }
+
+    // 话筒在 BOT 手中：正常走缓冲池排队与双计时器调度
     const meta = await this.bufferService.push(convId, senderId, messageId, msg.sentAt);
 
     this.logger.log(
@@ -203,20 +271,221 @@ export class InboundPipelineService {
   }
 
   /**
-   * 处理人工客服发言（话筒抢夺）
+   * 处理人工客服发言（话筒抢夺、在途组作废、缓冲归档、@机器人交还）
    */
   private async handleStaffMessage(convId: number, msg: InboundMessage): Promise<void> {
-    const pool = this.mysqlService.getPool();
-    await pool.query(
-      `UPDATE conversation SET mic_owner = 'HUMAN' WHERE id = ?`,
-      [convId],
-    );
+    const role = msg.sender.role;
+    const staffId = msg.sender.channelUserId;
 
+    // 1. 检查是否为客服 @机器人 显式交还话筒 (PRD §6.2、Task 3.7、附录 C S10)
+    const botId = this.env.WECOM_BOT_ID;
+    const hasMentionBot =
+      msg.mentions?.some(
+        (m) =>
+          m === 'BOT' ||
+          m.toLowerCase().includes('bot') ||
+          (botId && m === botId) ||
+          m === 'ai_assistant',
+      ) ||
+      Boolean(msg.text && (msg.text.includes('@机器人') || msg.text.includes('@小助理')));
+
+    if (this.env.MIC_RETURN_BY_MENTION_ENABLED && hasMentionBot && this.microphoneService) {
+      this.logger.log(`🛎️ [话筒交还] 识别到客服 @机器人 发言，触发显式交还话筒: convId=${convId}, staffId=${staffId}`);
+      const returnRes = await this.microphoneService.returnByMention(convId, staffId);
+      await this.timerService?.cancelHumanWait?.(convId, returnRes.epoch);
+
+      // 附录 C 用例 S10: 话筒→BOT，发送专属交还占位语
+      const welcomeText = '尊敬的客户，您好，我是您的专属客服，接下来由我持续为您服务！';
+      if (this.channelAdapter) {
+        try {
+          await this.channelAdapter.send({
+            tenantId: msg.tenantId,
+            channel: msg.channel,
+            channelChatId: msg.channelChatId,
+            kind: 'PLACEHOLDER',
+            text: welcomeText,
+            conversationId: convId,
+          });
+          this.logger.log(`📨 [话筒交还] 已向会话 [convId=${convId}] 渠道群聊下发专属交还欢迎语`);
+        } catch (sendErr) {
+          this.logger.warn(`⚠️ [话筒交还] 下发专属交还欢迎语失败: ${(sendErr as Error).message}`);
+        }
+      }
+      return;
+    }
+
+    // 2. 检查抢占范围参数 (PRD §11.3、Task 3.2、S21 用例)
+    if (this.env.MIC_SEIZE_SCOPE === 'CS_ONLY' && role === 'STAFF_OTHER') {
+      this.logger.log(
+        `👔 内部其他员工发言 (STAFF_OTHER)，但 MIC_SEIZE_SCOPE=CS_ONLY，跳过话筒抢夺: convId=${convId}`,
+      );
+      return;
+    }
+
+    // 3. 驱动原子抢话筒 (Task 3.1 & 3.2)
     const redis = this.redisService.getClient();
-    await redis.hset(REDIS_KEYS.mic(convId), {
-      owner: 'HUMAN',
-      staffId: msg.sender.channelUserId,
-      seizedAt: String(Date.now()),
-    });
+    let currentEpoch = 1;
+    if (this.microphoneService) {
+      const seizeRes = await this.microphoneService.seizeByStaff(convId, staffId, role);
+      currentEpoch = seizeRes.epoch;
+    } else {
+      const pool = this.mysqlService.getPool();
+      await pool.query(`UPDATE conversation SET mic_owner = 'HUMAN' WHERE id = ?`, [convId]);
+      await redis?.hset?.(REDIS_KEYS.mic(convId), {
+        owner: 'HUMAN',
+        staffId,
+        seizedAt: String(Date.now()),
+      });
+    }
+
+    // 4. 取消 60s 人工未回复等待任务 (Task 3.5)
+    await this.timerService?.cancelHumanWait?.(convId, currentEpoch);
+
+    const pool = this.mysqlService.getPool();
+
+    // 5. 在途组作废检查与联动 (Task 1.2 / Task 3.3 / S7 用例)
+    const inflightKey = REDIS_KEYS.inflight(convId);
+    const inflight = await redis?.hgetall?.(inflightKey);
+    if (inflight && inflight.groupId) {
+      try {
+        const [rows] = await pool.query<RowDataPacket[]>(
+          'SELECT status, turn_id FROM msg_group WHERE id = ?',
+          [inflight.groupId],
+        );
+        const currentStatus = rows?.[0]?.status;
+        const groupTurnId = rows?.[0]?.turn_id;
+        const effectiveTurnId = groupTurnId || inflight.turnId;
+
+        if (
+          (currentStatus === 'UNDERSTANDING' || currentStatus === 'FINAL_CHECKING') &&
+          this.stateTransitionService
+        ) {
+          // 5.1 原子跃迁 msg_group 状态为 VOIDED
+          await this.stateTransitionService.transition(
+            'GROUP',
+            inflight.groupId,
+            currentStatus,
+            'VOIDED',
+            {
+              tenantId: msg.tenantId,
+              operatorType: 'STAFF',
+              reason: 'MIC_SEIZED',
+              traceId: String(msg.channelMsgId),
+            },
+          );
+
+          // 5.2 同步更新关联轮次 turn 表记录 (reply_status='VOIDED', status='DONE')
+          if (effectiveTurnId) {
+            await pool.query(
+              `UPDATE turn SET reply_status = 'VOIDED', status = 'DONE', finished_at = NOW(3) WHERE id = ?`,
+              [effectiveTurnId],
+            );
+          }
+
+          // 5.3 触发在途 LLM 生成任务中断（尽力而为节省 Token）
+          this.abortInflight(inflight.groupId);
+
+          this.logger.log(
+            `🚨 [S7] 员工发言抢占话筒，在途组 #${inflight.groupId} (${currentStatus}) 已原子作废为 VOIDED, 轮次 #${effectiveTurnId || 'N/A'} 已标记作废`,
+          );
+        }
+      } catch (err: any) {
+        this.logger.warn(`在途组作废流转失败: ${err.message}`);
+      }
+      await redis?.del?.(inflightKey);
+      await redis?.del?.(REDIS_KEYS.convLock(convId));
+    }
+
+    // 6. 客户未处理缓冲池消息就地封组归档 (Task 1.3 / Task 3.4 / S8 用例)
+    const senders = (await this.bufferService?.nonEmptySenders?.(convId)) || [];
+    for (const sender of senders) {
+      const messageIds = await this.bufferService.drain(convId, sender);
+      if (messageIds && messageIds.length > 0) {
+        const [msgRows] = await pool.query<RowDataPacket[]>(
+          'SELECT content, sent_at FROM message WHERE id IN (?) ORDER BY sent_at ASC',
+          [messageIds],
+        );
+        const mergedText = (Array.isArray(msgRows) ? msgRows : [])
+          .map((r: any) => r.content || '')
+          .filter(Boolean)
+          .join('\n');
+        const firstMsgAt = (Array.isArray(msgRows) && msgRows[0]?.sent_at) || new Date();
+
+        const [groupRes] = await pool.query<any>(
+          `INSERT INTO msg_group (
+             tenant_id, conversation_id, sender_channel_user_id,
+             status, seal_reason, message_count, merged_text,
+             first_msg_at, sealed_at
+           ) VALUES (?, ?, ?, 'ARCHIVED', 'HUMAN_REPLIED', ?, ?, ?, NOW(3))`,
+          [msg.tenantId, convId, sender, messageIds.length, mergedText, firstMsgAt],
+        );
+        const groupId = groupRes.insertId;
+
+        await pool.query(
+          `UPDATE message SET group_id = ? WHERE id IN (?)`,
+          [groupId, messageIds],
+        );
+
+        // 获取当前轮次序号与规则包版本
+        const [convRows] = await pool.query<RowDataPacket[]>(
+          'SELECT turn_count, rule_pack_version FROM conversation WHERE id = ?',
+          [convId],
+        );
+        const nextSeq =
+          Array.isArray(convRows) && convRows[0]?.turn_count != null
+            ? convRows[0].turn_count + 1
+            : 1;
+        const rulePackVersion =
+          (Array.isArray(convRows) && convRows[0]?.rule_pack_version) || 'v1.0.0';
+
+        const [turnRes] = await pool.query<any>(
+          `INSERT INTO turn (
+             tenant_id, conversation_id, seq,
+             status, responder, reply_text, reply_status, rule_pack_version,
+             started_at, finished_at
+           ) VALUES (?, ?, ?, 'DONE', 'HUMAN', ?, 'SENT', ?, ?, NOW(3))`,
+          [msg.tenantId, convId, nextSeq, msg.text || '', rulePackVersion, firstMsgAt],
+        );
+        const turnId = turnRes.insertId;
+
+        // 关联更新 msg_group 的 turn_id
+        await pool.query('UPDATE msg_group SET turn_id = ? WHERE id = ?', [turnId, groupId]);
+
+        await pool.query(
+          `UPDATE conversation SET turn_count = turn_count + 1 WHERE id = ?`,
+          [convId],
+        );
+
+        // 异步更新/追加至会话笔记 conversation_background（记录人工问答历史，确保后续接管上下文延续）
+        try {
+          await pool.query(
+            `INSERT INTO conversation_background (conversation_id, tenant_id, content, updated_turn_seq, updated_at)
+             VALUES (?, ?, JSON_ARRAY(JSON_OBJECT('turnSeq', ?, 'question', ?, 'reply', ?, 'staffId', ?, 'time', NOW(3))), ?, NOW(3))
+             ON DUPLICATE KEY UPDATE
+               content = JSON_ARRAY_APPEND(content, '$', JSON_OBJECT('turnSeq', VALUES(updated_turn_seq), 'question', ?, 'reply', ?, 'staffId', ?, 'time', NOW(3))),
+               updated_turn_seq = VALUES(updated_turn_seq),
+               updated_at = NOW(3)`,
+            [
+              convId,
+              msg.tenantId,
+              nextSeq,
+              mergedText,
+              msg.text || '',
+              msg.sender.channelUserId,
+              nextSeq,
+              mergedText,
+              msg.text || '',
+              msg.sender.channelUserId,
+            ],
+          );
+        } catch (noteErr: any) {
+          this.logger.warn(`会话笔记更新失败: ${noteErr.message}`);
+        }
+
+        this.logger.log(
+          `📦 [S8] 员工抢跑解答，客户未处理缓冲消息 [${messageIds.length}条] 就地封组归档 (ARCHIVED), 形成人工轮次 #${nextSeq}`,
+        );
+      }
+    }
   }
 }

@@ -8,7 +8,8 @@
     "start": "node dist/main.js",
     "migrate": "node dist/database/migrate.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "test:phase1": "jest test/state-transition.spec.ts test/watchdog.spec.ts test/idle-timeout.spec.ts test/phase1-integration.spec.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",

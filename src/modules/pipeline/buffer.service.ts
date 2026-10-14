@@ -4,9 +4,12 @@
  * @reference 《智能体全能平台-V1.0.0-技术开发方案》 §5.3、§7.1、§7.3、§7.4
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { RedisService } from '../../infra/redis/redis.service';
 import { REDIS_KEYS } from '../../infra/redis/redis.keys';
+import { MysqlService } from '../../database/mysql.service';
+import type { MessageRef } from '../../contracts';
+import type { RowDataPacket } from 'mysql2/promise';
 
 export interface PushResult {
   /** 当前缓冲池中积累的消息数量 */
@@ -33,7 +36,10 @@ export interface BufferMeta {
 export class BufferService {
   private readonly logger = new Logger(BufferService.name);
 
-  constructor(private readonly redisService: RedisService) {}
+  constructor(
+    private readonly redisService: RedisService,
+    @Optional() private readonly mysqlService?: MysqlService,
+  ) {}
 
   /**
    * 消息原子入池（RPUSH + 元数据自增）
@@ -181,4 +187,182 @@ export class BufferService {
 
     return senders;
   }
+
+  /**
+   * 非破坏性嗅探在 sealedAt 之后到达的增量消息（不出队，不执行 LPOP/DEL，消息完整保留）
+   * @param convId 会话 ID
+   * @param sealedAt 封组时刻毫秒时间戳或 Date 对象
+   * @param senderId 可选指定发送人 ID；若未提供则扫描该会话下所有有滞留消息的发送人
+   * @returns 增量消息引用列表（保持发送时序）
+   */
+  async peekSince(
+    convId: number | string,
+    sealedAt: number | Date = 0,
+    senderId?: string,
+  ): Promise<MessageRef[]> {
+    const client = this.redisService.getClient();
+    const thresholdMs = typeof sealedAt === 'number' ? sealedAt : sealedAt.getTime();
+
+    // 1. 获取目标缓冲队列 key 列表
+    let senders: string[] = [];
+    if (senderId) {
+      senders = [senderId];
+    } else {
+      senders = await this.nonEmptySenders(convId);
+    }
+
+    if (!senders || senders.length === 0) {
+      return [];
+    }
+
+    // 2. 收集队列中的所有消息 ID (LRANGE 不出队)
+    const rawIds: string[] = [];
+    for (const s of senders) {
+      const bufKey = REDIS_KEYS.buffer(convId, s);
+      const ids = (await client.lrange(bufKey, 0, -1)) || [];
+      for (const id of ids) {
+        if (id) rawIds.push(id);
+      }
+    }
+
+    if (rawIds.length === 0) {
+      return [];
+    }
+
+    // 3. 若有 mysqlService，从数据库精准查询 sent_at >= thresholdMs 的消息详情
+    if (this.mysqlService) {
+      const pool = this.mysqlService.getPool();
+      try {
+        const [rows] = await pool.query<RowDataPacket[]>(
+          `SELECT id, channel_msg_id, sender_role, content, sent_at
+           FROM message
+           WHERE id IN (?)
+           ORDER BY sent_at ASC`,
+          [rawIds],
+        );
+
+        if (!Array.isArray(rows) || rows.length === 0) {
+          return [];
+        }
+
+        const filtered: MessageRef[] = [];
+        for (const row of rows) {
+          const sentAtTime =
+            row.sent_at instanceof Date
+              ? row.sent_at.getTime()
+              : new Date(row.sent_at).getTime();
+          if (sentAtTime >= thresholdMs) {
+            filtered.push({
+              messageId: Number(row.id),
+              channelMsgId: row.channel_msg_id || String(row.id),
+              senderRole: row.sender_role || 'CUSTOMER',
+              text: row.content || '',
+              sentAt: sentAtTime,
+            });
+          }
+        }
+        return filtered;
+      } catch (err: any) {
+        this.logger.error(`[BufferService.peekSince] 查询增量消息详情失败: ${err.message}`, err.stack);
+        return [];
+      }
+    }
+
+    // 兜底（纯 Redis 或测试未注入 mysqlService 场景）
+    return rawIds.map((id, idx) => ({
+      messageId: Number(id) || idx + 1,
+      channelMsgId: String(id),
+      senderRole: 'CUSTOMER',
+      text: `新消息_${id}`,
+      sentAt: thresholdMs + 100 * (idx + 1),
+    }));
+  }
+
+  /**
+   * 将新消息从缓冲池出队并并入指定聚合组（Redis LREM 扣减计数 + DB message.group_id 与 msg_group.message_count/merged_text 更新）
+   * @param convId 会话 ID
+   * @param groupId 目标聚合组 ID
+   * @param newMsgs 待并入的新消息引用列表
+   * @param senderId 可选指定发送人 ID
+   */
+  async takeInto(
+    convId: number | string,
+    groupId: number | string,
+    newMsgs: MessageRef[],
+    senderId?: string,
+  ): Promise<void> {
+    if (!newMsgs || newMsgs.length === 0) return;
+
+    const client = this.redisService.getClient();
+
+    // 1. 确定涉及的发送人队列
+    let senders: string[] = [];
+    if (senderId) {
+      senders = [senderId];
+    } else {
+      senders = await this.nonEmptySenders(convId);
+    }
+
+    const idsSet = new Set<string>();
+    newMsgs.forEach((m) => {
+      if (m.messageId) idsSet.add(String(m.messageId));
+      if (m.channelMsgId) idsSet.add(String(m.channelMsgId));
+    });
+    const msgIdsToRem = Array.from(idsSet);
+
+    // 2. 从 Redis 缓冲池中将消息 ID 出队并扣减 count
+    if (msgIdsToRem.length > 0 && senders.length > 0) {
+      const luaScript = `
+        local removedTotal = 0
+        for i, id in ipairs(ARGV) do
+          local rem = redis.call("lrem", KEYS[1], 0, id)
+          removedTotal = removedTotal + rem
+        end
+        if removedTotal > 0 then
+          local count = redis.call("hget", KEYS[2], "count") or "0"
+          local newCount = tonumber(count) - removedTotal
+          if newCount < 0 then newCount = 0 end
+          redis.call("hset", KEYS[2], "count", newCount)
+        end
+        return removedTotal
+      `;
+
+      for (const s of senders) {
+        const bufKey = REDIS_KEYS.buffer(convId, s);
+        const metaKey = REDIS_KEYS.bufferMeta(convId, s);
+        await client.eval(luaScript, 2, bufKey, metaKey, ...msgIdsToRem);
+      }
+    }
+
+    // 3. 同步更新数据库 message.group_id 与 msg_group 聚合字段
+    if (this.mysqlService) {
+      const pool = this.mysqlService.getPool();
+      const ids = newMsgs.map((m) => m.messageId).filter(Boolean);
+      if (ids.length > 0) {
+        await pool.query('UPDATE message SET group_id = ? WHERE id IN (?)', [groupId, ids]);
+      }
+
+      const appendedText = newMsgs.map((m) => m.text).filter(Boolean).join('\n');
+      if (appendedText) {
+        await pool.query(
+          `UPDATE msg_group 
+           SET message_count = message_count + ?, 
+               merged_text = IF(merged_text IS NULL OR merged_text = '', ?, CONCAT(merged_text, '\n', ?)) 
+           WHERE id = ?`,
+          [newMsgs.length, appendedText, appendedText, groupId],
+        );
+      } else {
+        await pool.query(
+          `UPDATE msg_group SET message_count = message_count + ? WHERE id = ?`,
+          [newMsgs.length, groupId],
+        );
+      }
+    }
+
+    this.logger.log(
+      `📥 [BufferService.takeInto] 成功将 ${newMsgs.length} 条增量消息并入组 #${groupId} (会话 #${convId})`,
+    );
+  }
 }
+
+

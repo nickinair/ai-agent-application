@@ -52,6 +52,20 @@ const EnvSchema = z.object({
   HARD_TIMEOUT_MS: z.coerce.number().int().default(15000),
   /** 单组最大容纳客户消息数，达到立即封组，默认 5 条 */
   GROUP_MAX_MESSAGES: z.coerce.number().int().default(5),
+  /** 普通会话空闲超时（ms），默认 30 分钟 (1800000ms) */
+  SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().optional(),
+  /** 完结收尾会话空闲超时（ms），默认 5 分钟 (300000ms) */
+  CLOSE_IDLE_TIMEOUT_MS: z.coerce.number().int().optional(),
+
+  // =========================================================================
+  // 话筒机制与人机协同控制参数（§6.2、§11.3）
+  // =========================================================================
+  /** 员工抢话筒生效范围：ALL_INTERNAL (所有员工) 或 CS_ONLY (仅客服) */
+  MIC_SEIZE_SCOPE: z.enum(['ALL_INTERNAL', 'CS_ONLY']).optional(),
+  /** 客服 @机器人 是否交还话筒开关，默认 false（关闭） */
+  MIC_RETURN_BY_MENTION_ENABLED: BooleanEnvSchema.optional(),
+  /** 人工客服回复等待超时（ms），默认 60000ms（60秒自动接回） */
+  HUMAN_WAIT_TIMEOUT_MS: z.coerce.number().int().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

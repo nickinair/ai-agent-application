@@ -178,6 +178,8 @@ export class SealerService implements ISealer, OnModuleInit {
           },
         },
         rulePackVersion: conv.rule_pack_version || 'v1.0.0',
+        sealedAt: Date.now(),
+        mergeCount: 0,
         timings: {
           sealedAt: Date.now(),
         },

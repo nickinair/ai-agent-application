@@ -9,3 +9,4 @@ export * from './message';
 export * from './turn-context';
 export * from './schemas';
 export * from './mq';
+export * from './channel-adapter';

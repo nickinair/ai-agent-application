@@ -59,6 +59,7 @@ describe('统一入站消息流水线测试 (InboundPipelineService)', () => {
     mockTimerService = {
       scheduleQuiet: jest.fn(),
       scheduleHard: jest.fn(),
+      scheduleIdle: jest.fn().mockResolvedValue(1),
     };
 
     mockSealerService = {

@@ -46,6 +46,12 @@ export const REDIS_KEYS = {
   background: (convId: number | string) => `ag:bg:${convId}`,
 
   /**
+   * 会话空闲超时版本序列号（String / Integer 自增）
+   * @param convId 会话 ID
+   */
+  idleSeq: (convId: number | string) => `ag:idle:seq:${convId}`,
+
+  /**
    * 活跃会话映射（String: 群聊 -> 活跃会话 ID）
    * @param tenantId 租户 ID
    * @param channelChatId 群 ID
