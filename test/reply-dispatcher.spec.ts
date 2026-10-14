@@ -55,7 +55,7 @@ describe('ReplyDispatcherService', () => {
     sealer = { onTurnDone: jest.fn(async () => undefined) };
     states = { transition: jest.fn(async () => undefined) };
     channel = { send: jest.fn(async () => ({})) };
-    svc = new ReplyDispatcherService(queues as any, { getPool: () => pool } as any, finalCheck as any, mic as any, timers as any, sealer as any, states as any, channel as any);
+    svc = new ReplyDispatcherService({ WECOM_BOT_ENABLED: true, WECOM_BOT_ID: 'bot' } as any, queues as any, { getPool: () => pool } as any, finalCheck as any, mic as any, timers as any, sealer as any, states as any, channel as any);
   });
 
   const results = () => added.filter((a) => a.queue === 'agent.queue.turn-result').map((a) => a.data);
@@ -178,5 +178,25 @@ describe('renderWecomMarkdown', () => {
   });
   it('私信不带 @', () => {
     expect(renderWecomMarkdown({ text: '交接包', mentions: ['a'], toUserId: 'cs' })).toBe('交接包');
+  });
+});
+
+describe('ChannelRouter / TestChannelRecorder', () => {
+  it('测试会话只记录不外发，其余走企微', async () => {
+    const { ChannelRouter } = await import('../src/modules/reply/channel-router');
+    const { TestChannelRecorder } = await import('../src/modules/reply/test-channel.recorder');
+    const lists = new Map<string, string[]>();
+    const multi: any = {
+      rpush: (k: string, v: string) => { lists.set(k, [...(lists.get(k) ?? []), v]); return multi; },
+      ltrim: () => multi, expire: () => multi, exec: async () => [],
+    };
+    const redis = { getClient: () => ({ multi: () => multi, lrange: async (k: string) => lists.get(k) ?? [] }) };
+    const recorder = new TestChannelRecorder(redis as any);
+    const wecom = { send: jest.fn(async () => ({ channelMsgId: 'w1' })) };
+    const router = new ChannelRouter(wecom as any, recorder);
+    await router.send({ tenantId: 1, channel: 'test', channelChatId: 'c1', kind: 'REPLY', text: '你好', mentions: ['u1'] });
+    await router.send({ tenantId: 1, channel: 'wecom_group', channelChatId: 'c2', kind: 'REPLY', text: '你好' });
+    expect(wecom.send).toHaveBeenCalledTimes(1);
+    expect(await recorder.sentTo('c1')).toEqual([expect.objectContaining({ text: '你好', mentions: ['u1'], kind: 'REPLY' })]);
   });
 });

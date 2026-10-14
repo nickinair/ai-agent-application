@@ -14,6 +14,7 @@ import { WecomGroupMessageService } from './wecom-group-message.service';
 import { ENV, type Env } from '../../config/env';
 import type { WecomBotStatus } from './types/wecom.types';
 import type { InboundFinanceEventDto } from './types/wecom-finance-inbound.dto';
+import { Public } from '../../auth/tenant-context';
 
 @Controller('wecom')
 export class WecomController {
@@ -38,7 +39,9 @@ export class WecomController {
   /**
    * 接收来自 wecom-finance Sidecar 模块投递的会话内容存档全量群事件
    * POST /api/admin/wecom/finance-inbound
+   * Sidecar 不带管理 API 的登录令牌，只用 x-sidecar-token 鉴权；生产环境没配 WECOM_SIDECAR_TOKEN 时一律拒绝
    */
+  @Public()
   @Post('finance-inbound')
   @HttpCode(HttpStatus.OK)
   async handleFinanceInbound(
@@ -46,6 +49,9 @@ export class WecomController {
     @Headers('x-sidecar-token') sidecarToken?: string,
   ): Promise<{ code: number; message: string; handled: boolean }> {
     // 若配置了 WECOM_SIDECAR_TOKEN，则执行强校验
+    if (!this.env.WECOM_SIDECAR_TOKEN && this.env.NODE_ENV === 'production') {
+      throw new UnauthorizedException('未配置 WECOM_SIDECAR_TOKEN，拒绝接收存档事件');
+    }
     if (this.env.WECOM_SIDECAR_TOKEN) {
       if (!sidecarToken || sidecarToken !== this.env.WECOM_SIDECAR_TOKEN) {
         throw new UnauthorizedException('无效或未提供 x-sidecar-token 鉴权凭证');

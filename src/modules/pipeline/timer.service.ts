@@ -100,7 +100,8 @@ export class TimerService implements OnModuleInit {
   ): Promise<void> {
     const delay = delayMs ?? this.env.QUIET_WINDOW_MS;
     const queue = this.queueService.getQueue<QuietJobData>(QUEUE_NAMES.timer);
-    const jobId = `quiet:${convId}:${senderId}:${version}`;
+    // BullMQ 6 的自定义 jobId 含冒号时必须正好 3 段，发送人与版本号之间用 @
+    const jobId = `quiet:${convId}:${senderId}@${version}`;
 
     await queue.add(
       'quiet',
@@ -138,7 +139,7 @@ export class TimerService implements OnModuleInit {
   ): Promise<void> {
     const delay = delayMs ?? this.env.HARD_TIMEOUT_MS;
     const queue = this.queueService.getQueue<HardJobData>(QUEUE_NAMES.timer);
-    const jobId = `hard:${convId}:${senderId}:${epoch}`;
+    const jobId = `hard:${convId}:${senderId}@${epoch}`;
 
     await queue.add(
       'hard',

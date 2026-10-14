@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { Job } from 'bullmq';
 import type { RowDataPacket, ResultSetHeader } from 'mysql2';
+import { ENV, type Env } from '../../config/env';
 import { MysqlService } from '../../database/mysql.service';
 import { QueueService } from '../../infra/queue/queue.service';
 import { CHANNEL_ADAPTER, type ChannelAdapter, type MessageRef, type TurnContext } from '../../contracts';
@@ -36,6 +37,7 @@ export class ReplyDispatcherService implements OnModuleInit {
   private readonly logger = new Logger(ReplyDispatcherService.name);
 
   constructor(
+    @Inject(ENV) private readonly env: Env,
     private readonly queues: QueueService,
     private readonly mysql: MysqlService,
     private readonly finalCheck: FinalCheckService,
@@ -46,7 +48,16 @@ export class ReplyDispatcherService implements OnModuleInit {
     @Inject(CHANNEL_ADAPTER) private readonly channel: ChannelAdapter,
   ) {}
 
+  /**
+   * 企微智能机器人只有一条长连接，只在持有它的实例上消费（多台应用机时其余实例设 WECOM_BOT_ENABLED=false）；
+   * 测试环境打开测试注入时也消费（测试会话只记录不外发）。
+   */
   onModuleInit(): void {
+    const hasBot = this.env.WECOM_BOT_ENABLED && !!this.env.WECOM_BOT_ID;
+    if (!hasBot && !this.env.TEST_INJECT_ENABLED) {
+      this.logger.warn('本实例没有企微机器人长连接，也没开测试注入，不消费 agent.queue.post');
+      return;
+    }
     this.queues.createWorker<PostJob>(REPLY_QUEUES.post, (job: Job<PostJob>) => this.dispatch(job.data), { concurrency: CONCURRENCY });
   }
 
