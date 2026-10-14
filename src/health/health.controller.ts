@@ -1,6 +1,8 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Public } from '../auth/tenant-context';
 import { MysqlService } from '../database/mysql.service';
 
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly mysql: MysqlService) {}

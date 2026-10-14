@@ -26,3 +26,6 @@ jobs:
       # 在空库上跑一遍全部迁移，再跑一遍确认幂等
       - run: npm run migrate && npm run migrate
         env: { MYSQL_URL: "mysql://root:root@127.0.0.1:3306/agent_platform" }
+      # 管理 API 集成测试（鉴权、租户隔离、角色、会话 / 转人工查询）
+      - run: npx jest test/integration
+        env: { IT_MYSQL_URL: "mysql://root:root@127.0.0.1:3306/agent_platform" }
