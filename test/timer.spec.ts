@@ -65,7 +65,7 @@ describe('双计时器调度服务测试 (TimerService)', () => {
           version: 3,
         },
         expect.objectContaining({
-          jobId: 'quiet:101:user_zhang:3',
+          jobId: 'quiet:101:user_zhang@3',
           delay: 3000,
         }),
       );
@@ -83,7 +83,7 @@ describe('双计时器调度服务测试 (TimerService)', () => {
           epoch: 1,
         },
         expect.objectContaining({
-          jobId: 'hard:101:user_zhang:1',
+          jobId: 'hard:101:user_zhang@1',
           delay: 15000,
         }),
       );

@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import bcrypt from 'bcryptjs';
-import { ENV, Env } from '../config/env';
+import { ENV, Env, jwtSecret } from '../config/env';
 import { MysqlService } from '../database/mysql.service';
 import { signToken } from './jwt';
 import { LoginLimiter } from './login-limiter';
@@ -37,7 +37,8 @@ export class AuthService {
     }
     this.limiter.succeed(...keys);
     const user: TokenClaims = { sub: Number(acc.id), tenantId: Number(tenantId), username, role: acc.role };
-    return { token: signToken(user, this.env.JWT_SECRET, this.env.JWT_TTL_SECONDS), expiresIn: this.env.JWT_TTL_SECONDS, user };
+    const ttl = this.env.JWT_TTL_SECONDS ?? 8 * 3600;
+    return { token: signToken(user, jwtSecret(this.env), ttl), expiresIn: ttl, user };
   }
 }
 

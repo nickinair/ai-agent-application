@@ -18,6 +18,10 @@ const EnvSchema = z.object({
   MYSQL_URL: z.string().default('mysql://agent:agent@localhost:3306/agent_platform'),
   /** 改成员角色、协作方白名单后通知核心服务丢弃缓存（ag:cfg:changed） */
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  /** 测试注入接口（/test/inject 等，§13.1、评审 C6）：只在测试环境打开，生产必须为 false */
+  TEST_INJECT_ENABLED: BooleanEnvSchema.default(false),
+  /** 测试注入没带 tenantId 时用的租户 */
+  TEST_TENANT_ID: z.coerce.number().int().positive().default(1),
   /** 管理 API 的 JWT 签名密钥（§11.4）；生产环境必须配置且不少于 32 个字符 */
   JWT_SECRET: z.string().default('dev-only-secret-change-me-in-production!!'),
   /** 令牌有效期（秒），默认 8 小时 */
@@ -76,7 +80,9 @@ const EnvSchema = z.object({
   HUMAN_WAIT_TIMEOUT_MS: z.coerce.number().int().optional(),
 });
 
-export type Env = z.infer<typeof EnvSchema>;
+/** 管理 API 与配置通知用的字段（倪开）在类型上可选：运行时由 loadEnv 填默认值，单测手写的 Env 对象不必带上 */
+type ApiEnvKeys = 'NODE_ENV' | 'REDIS_URL' | 'JWT_SECRET' | 'JWT_TTL_SECONDS' | 'TEST_INJECT_ENABLED' | 'TEST_TENANT_ID';
+export type Env = Omit<z.infer<typeof EnvSchema>, ApiEnvKeys> & Partial<Pick<z.infer<typeof EnvSchema>, ApiEnvKeys>>;
 
 let envFilesLoaded = false;
 
@@ -157,18 +163,42 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     envFilesLoaded = true;
   }
 
-  const parsed = EnvSchema.safeParse(source);
+  const parsed = EnvSchema.safeParse(withRedisFromUrl(source));
   if (!parsed.success) {
     throw new Error(`环境变量校验失败：${parsed.error.message}`);
   }
   return parsed.data;
 }
 
+/**
+ * 部署只配一个 REDIS_URL（与核心服务相同，两边必须连同一个 Redis 的同一个库）：
+ * 没单独配 REDIS_HOST 时，从 REDIS_URL 拆出主机、端口、密码、库号给运行时的 Redis / BullMQ 用。
+ */
+export function withRedisFromUrl(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!source.REDIS_URL || source.REDIS_HOST) return source;
+  const u = new URL(source.REDIS_URL);
+  const db = u.pathname.replace(/^\//, '');
+  return {
+    ...source,
+    REDIS_HOST: u.hostname,
+    REDIS_PORT: u.port || '6379',
+    ...(u.password ? { REDIS_PASSWORD: decodeURIComponent(u.password) } : {}),
+    ...(db ? { REDIS_DB: db } : {}),
+  };
+}
+
 /** 管理 API 启动时检查（迁移、命令行不需要 JWT，不做这项检查）：生产环境必须配置足够长的 JWT 密钥 */
 export function assertApiSecrets(env: Env): void {
-  if (env.NODE_ENV === 'production' && (env.JWT_SECRET.length < 32 || env.JWT_SECRET.startsWith('dev-only'))) {
+  const secret = env.JWT_SECRET ?? '';
+  if (env.NODE_ENV === 'production' && (secret.length < 32 || secret.startsWith('dev-only'))) {
     throw new Error('生产环境必须配置不少于 32 个字符的 JWT_SECRET');
   }
+}
+
+/** JWT 签名密钥：loadEnv 总会给值；手写的 Env 缺这项时直接报错，不用空密钥签发或校验 */
+export function jwtSecret(env: Env): string {
+  if (!env.JWT_SECRET) throw new Error('未配置 JWT_SECRET');
+  return env.JWT_SECRET;
 }
 
 export const ENV = Symbol('ENV');

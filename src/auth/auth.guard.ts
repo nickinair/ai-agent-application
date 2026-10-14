@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ENV, Env } from '../config/env';
+import { ENV, Env, jwtSecret } from '../config/env';
 import { verifyToken } from './jwt';
 import { AdminRole, IS_PUBLIC, ROLES, TenantContext } from './tenant-context';
 
@@ -20,7 +20,7 @@ export class AuthGuard implements CanActivate {
     if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, targets)) return true;
     const req = ctx.switchToHttp().getRequest();
     const header = String(req.headers.authorization ?? '');
-    const user = header.startsWith('Bearer ') ? verifyToken(header.slice(7), this.env.JWT_SECRET) : null;
+    const user = header.startsWith('Bearer ') ? verifyToken(header.slice(7), jwtSecret(this.env)) : null;
     if (!user) throw new UnauthorizedException('请先登录');
 
     const asked = req.query?.tenantId === undefined ? undefined : Number(req.query.tenantId);

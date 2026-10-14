@@ -10,6 +10,6 @@ import { ENV, loadEnv } from '../config/env';
 @Global()
 @Module({
   providers: [{ provide: ENV, useFactory: () => loadEnv() }, MysqlService],
-  exports: [MysqlService],
+  exports: [ENV, MysqlService],
 })
 export class DatabaseModule {}
