@@ -76,7 +76,9 @@ const EnvSchema = z.object({
   HUMAN_WAIT_TIMEOUT_MS: z.coerce.number().int().optional(),
 });
 
-export type Env = z.infer<typeof EnvSchema>;
+/** 管理 API 与配置通知用的字段（倪开）在类型上可选：运行时由 loadEnv 填默认值，单测手写的 Env 对象不必带上 */
+type ApiEnvKeys = 'NODE_ENV' | 'REDIS_URL' | 'JWT_SECRET' | 'JWT_TTL_SECONDS';
+export type Env = Omit<z.infer<typeof EnvSchema>, ApiEnvKeys> & Partial<Pick<z.infer<typeof EnvSchema>, ApiEnvKeys>>;
 
 let envFilesLoaded = false;
 
@@ -166,9 +168,16 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
 
 /** 管理 API 启动时检查（迁移、命令行不需要 JWT，不做这项检查）：生产环境必须配置足够长的 JWT 密钥 */
 export function assertApiSecrets(env: Env): void {
-  if (env.NODE_ENV === 'production' && (env.JWT_SECRET.length < 32 || env.JWT_SECRET.startsWith('dev-only'))) {
+  const secret = env.JWT_SECRET ?? '';
+  if (env.NODE_ENV === 'production' && (secret.length < 32 || secret.startsWith('dev-only'))) {
     throw new Error('生产环境必须配置不少于 32 个字符的 JWT_SECRET');
   }
+}
+
+/** JWT 签名密钥：loadEnv 总会给值；手写的 Env 缺这项时直接报错，不用空密钥签发或校验 */
+export function jwtSecret(env: Env): string {
+  if (!env.JWT_SECRET) throw new Error('未配置 JWT_SECRET');
+  return env.JWT_SECRET;
 }
 
 export const ENV = Symbol('ENV');

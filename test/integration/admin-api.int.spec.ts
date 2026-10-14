@@ -31,7 +31,12 @@ d('管理 API', () => {
   const login = async (tenantCode: string, username: string, password = 'Agent2026pass') => (await call('POST', '/auth/login', undefined, { tenantCode, username, password })).body.token as string;
 
   beforeAll(async () => {
-    const env = loadEnv({ MYSQL_URL: process.env.IT_MYSQL_URL, JWT_SECRET: 'it-secret-'.repeat(4) });
+    // 应用启动时运行时的队列、计时器会连 Redis（IT_REDIS_URL，默认本机 6379）；企微长连接不启动
+    const redis = new URL(process.env.IT_REDIS_URL ?? 'redis://127.0.0.1:6379');
+    const env = loadEnv({
+      MYSQL_URL: process.env.IT_MYSQL_URL, JWT_SECRET: 'it-secret-'.repeat(4), WECOM_BOT_ENABLED: 'false',
+      REDIS_URL: redis.href, REDIS_HOST: redis.hostname, REDIS_PORT: redis.port || '6379',
+    });
     const mod = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(ENV).useValue(env)
       .overrideProvider(ConfigNotifier).useValue({ notify: async (...a: unknown[]) => void notified.push(a) })
@@ -57,7 +62,7 @@ d('管理 API', () => {
     ids.turn = (await mysql.execute(`INSERT INTO turn (tenant_id, conversation_id, seq, status, low_confidence, rule_pack_version, started_at) VALUES (?, ?, 1, 'DONE', 1, 'v1', NOW(3))`, [T, ids.conv])).insertId;
     ids.handoff = (await mysql.execute(`INSERT INTO handoff_record (tenant_id, conversation_id, turn_id, trigger_type, evidence, package, created_at) VALUES (?, ?, ?, 'BLIND_SPOT', '连续 2 轮低置信', '{"problems":[]}', NOW(3))`, [T, ids.conv, ids.turn])).insertId;
     await mysql.execute(`INSERT INTO chat_member (tenant_id, channel, channel_chat_id, member_id, member_type, role, role_source) VALUES (?, 'wecom_group', 'g1', 'wo-1', 'EXTERNAL_WECOM', 'CUSTOMER', 'CHANNEL'), (?, 'wecom_group', 'g1', 'wm-2', 'EXTERNAL_WECHAT', 'CUSTOMER', 'CHANNEL')`, [T, T]);
-  });
+  }, 30000);
 
   afterAll(async () => {
     for (const code of codes) for (const tb of ['admin_account', 'conversation', 'turn', 'handoff_record', 'chat_member', 'partner_corp']) await mysql.execute(`DELETE FROM ${tb} WHERE tenant_id = ?`, [ids[code]]);
