@@ -11,6 +11,10 @@ export class MysqlService implements OnModuleDestroy {
     this.pool = createPool({ uri: env.MYSQL_URL, connectionLimit: 10 });
   }
 
+  getPool(): Pool {
+    return this.pool;
+  }
+
   async ping(): Promise<boolean> {
     return this.pool.query('SELECT 1').then(() => true, () => false);
   }

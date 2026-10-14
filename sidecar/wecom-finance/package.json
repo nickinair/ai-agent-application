@@ -1,0 +1,51 @@
+{
+  "name": "wecom-finance-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "企业微信会话内容存档 (Finance SDK) 独立 Sidecar 模块",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "deploy:local": "bash deploy.sh deploy local",
+    "deploy:test": "bash deploy.sh deploy test",
+    "deploy:prod": "bash deploy.sh deploy prod",
+    "logs:local": "bash deploy.sh logs local",
+    "logs:test": "bash deploy.sh logs test",
+    "logs:prod": "bash deploy.sh logs prod",
+    "stop:local": "bash deploy.sh stop local",
+    "stop:test": "bash deploy.sh stop test",
+    "stop:prod": "bash deploy.sh stop prod",
+    "status": "bash deploy.sh status"
+  },
+  "keywords": [
+    "wecom",
+    "work-wechat",
+    "finance",
+    "sidecar"
+  ],
+  "dependencies": {
+    "koffi": "^2.16.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/test/**/*.spec.ts"
+    ]
+  }
+}

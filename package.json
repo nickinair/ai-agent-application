@@ -14,6 +14,9 @@
     "@nestjs/common": "^11.1.0",
     "@nestjs/core": "^11.1.0",
     "@nestjs/platform-express": "^11.1.0",
+    "@wecom/aibot-node-sdk": "^1.0.7",
+    "bullmq": "^6.3.14",
+    "ioredis": "^6.0.0",
     "mysql2": "^3.12.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -30,7 +33,11 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "roots": ["<rootDir>/test"]
+    "roots": [
+      "<rootDir>/test"
+    ]
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }

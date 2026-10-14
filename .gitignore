@@ -2,4 +2,9 @@ node_modules/
 dist/
 coverage/
 .env
+.env.*
+*.local
 *.log
+scripts/start-dev*.sh
+scripts/*.local.sh
+
