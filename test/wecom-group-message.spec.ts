@@ -169,120 +169,45 @@ describe('企业微信群聊消息模块 (WecomGroupMessageService)', () => {
   });
 
   describe('消息处理与转人工逻辑 (handleIncomingMessage)', () => {
-    it('文本与语音消息正常执行思考与流式回复', async () => {
-      const replyStreamSpy = jest.fn().mockResolvedValue({ headers: { req_id: 'reply' } });
-      const mockClient = { replyStream: replyStreamSpy } as unknown as WSClient;
-
-      // 文本消息
-      const textFrame: WsFrame<BaseMessage> = {
-        headers: { req_id: 'req_t1' },
-        body: {
-          msgid: 'msg_t1',
-          aibotid: 'bot_test',
-          chatid: 'chat_1',
-          chattype: 'group',
-          from: { userid: 'user_1' },
-          msgtype: 'text',
-          text: { content: '@机器人 查下物流' },
-        },
+    const frameOf = (msgid: string, userid: string, body: Record<string, unknown>): WsFrame<BaseMessage> => ({
+      headers: { req_id: `req_${msgid}` },
+      body: { msgid, aibotid: 'bot_test', chatid: 'chat_1', chattype: 'group', from: { userid }, ...body } as any,
+    });
+    const setup = (roles: Record<string, string> = {}) => {
+      const onInbound = jest.fn().mockResolvedValue({ status: 'PROCESSED' });
+      const memberRoles = {
+        tenantId: jest.fn().mockResolvedValue(7),
+        resolve: jest.fn(async (_t: number, _c: string, _chat: string, id: string) => ({ role: roles[id] ?? 'CUSTOMER', source: 'CHANNEL' })),
       };
+      const svc = new WecomGroupMessageService(mockEnv, { onInbound } as any, memberRoles as any);
+      const replyStream = jest.fn();
+      return { svc, onInbound, memberRoles, client: { replyStream } as unknown as WSClient, replyStream };
+    };
 
-      await service.handleIncomingMessage(mockClient, textFrame);
-      expect(replyStreamSpy).toHaveBeenCalledTimes(2);
-      expect(replyStreamSpy).toHaveBeenNthCalledWith(
-        2,
-        textFrame,
-        expect.any(String),
-        expect.stringContaining('查下物流'),
-        true,
-      );
-
-      // 语音消息
-      const voiceFrame: WsFrame<BaseMessage> = {
-        headers: { req_id: 'req_v1' },
-        body: {
-          msgid: 'msg_v1',
-          aibotid: 'bot_test',
-          chatid: 'chat_1',
-          chattype: 'group',
-          from: { userid: 'user_2' },
-          msgtype: 'voice',
-          voice: { content: '帮我开通权限' },
-        },
-      };
-
-      await service.handleIncomingMessage(mockClient, voiceFrame);
-      expect(replyStreamSpy).toHaveBeenCalledTimes(4);
-      expect(replyStreamSpy).toHaveBeenNthCalledWith(
-        4,
-        voiceFrame,
-        expect.any(String),
-        expect.stringContaining('帮我开通权限'),
-        true,
-      );
+    it('文本与语音消息交给流水线，不在群里本地应答（回复由流水线发出）', async () => {
+      const { svc, onInbound, client, replyStream } = setup();
+      await svc.handleIncomingMessage(client, frameOf('msg_t1', 'wmCustomer001', { msgtype: 'text', text: { content: '@机器人 查下物流' } }));
+      await svc.handleIncomingMessage(client, frameOf('msg_v1', 'wmCustomer001', { msgtype: 'voice', voice: { content: '帮我开通权限' } }));
+      expect(replyStream).not.toHaveBeenCalled();
+      expect(onInbound).toHaveBeenCalledTimes(2);
+      expect(onInbound.mock.calls[0][0]).toMatchObject({ tenantId: 7, channel: 'wecom_group', channelChatId: 'chat_1', type: 'text', text: '查下物流', sender: { role: 'CUSTOMER', channelUserId: 'wmCustomer001' } });
+      expect(onInbound.mock.calls[1][0]).toMatchObject({ type: 'voice', text: '帮我开通权限' });
     });
 
-    it('多媒体消息（图片/文件）自动触发转人工并 @客服', async () => {
-      const replyStreamSpy = jest.fn().mockResolvedValue({ headers: { req_id: 'reply_handoff' } });
-      const mockClient = { replyStream: replyStreamSpy } as unknown as WSClient;
-
-      const imgFrame: WsFrame<BaseMessage> = {
-        headers: { req_id: 'req_img' },
-        body: {
-          msgid: 'msg_img_handoff',
-          aibotid: 'bot_test',
-          chatid: 'chat_99',
-          chattype: 'group',
-          from: { userid: 'user_img' },
-          msgtype: 'image',
-          image: { url: 'https://example.com/screen.png' },
-        },
-      };
-
-      await service.handleIncomingMessage(mockClient, imgFrame);
-
-      // 应调用 replyStream 回复转人工提示并包含 @客服
-      expect(replyStreamSpy).toHaveBeenCalledWith(
-        imgFrame,
-        expect.any(String),
-        expect.stringContaining('@客服 老师请跟进支持'),
-        true,
-      );
-
-      const stats = service.getStats();
-      expect(stats.handoffCount).toBe(1);
+    it('图片 / 文件也交给流水线（组内以占位处理），不再本地转人工应答', async () => {
+      const { svc, onInbound, client, replyStream } = setup();
+      await svc.handleIncomingMessage(client, frameOf('msg_img', 'wmCustomer001', { msgtype: 'image', image: { url: 'https://example.com/screen.png' } }));
+      expect(replyStream).not.toHaveBeenCalled();
+      expect(onInbound.mock.calls[0][0]).toMatchObject({ type: 'image', mediaUrl: 'https://example.com/screen.png' });
     });
 
-    it('自定义 WECOM_STAFF_MENTIONS 配置时应使用配置的客服标记', async () => {
-      const customEnvService = new WecomGroupMessageService({
-        ...mockEnv,
-        WECOM_STAFF_MENTIONS: '@张三,@李四',
-      });
-
-      const replyStreamSpy = jest.fn().mockResolvedValue({ headers: { req_id: 'reply' } });
-      const mockClient = { replyStream: replyStreamSpy } as unknown as WSClient;
-
-      const fileFrame: WsFrame<BaseMessage> = {
-        headers: { req_id: 'req_f2' },
-        body: {
-          msgid: 'msg_file_handoff',
-          aibotid: 'bot_test',
-          chatid: 'chat_99',
-          chattype: 'group',
-          from: { userid: 'user_f' },
-          msgtype: 'file',
-          file: { url: 'https://example.com/contract.pdf' },
-        },
-      };
-
-      await customEnvService.handleIncomingMessage(mockClient, fileFrame);
-
-      expect(replyStreamSpy).toHaveBeenCalledWith(
-        fileFrame,
-        expect.any(String),
-        expect.stringContaining('@张三,@李四 老师请跟进支持'),
-        true,
-      );
+    it('按识别结果带上发送人角色；机器人自己的消息不进流水线', async () => {
+      const { svc, onInbound, memberRoles, client } = setup({ zhangsan: 'STAFF_CS', lisi: 'STAFF_OTHER', bot_self: 'BOT' });
+      await svc.handleIncomingMessage(client, frameOf('m1', 'zhangsan', { msgtype: 'text', text: { content: '我来处理' } }));
+      await svc.handleIncomingMessage(client, frameOf('m2', 'lisi', { msgtype: 'text', text: { content: '收到' } }));
+      await svc.handleIncomingMessage(client, frameOf('m3', 'bot_self', { msgtype: 'text', text: { content: '自己发的' } }));
+      expect(memberRoles.resolve).toHaveBeenCalledWith(7, 'wecom_group', 'chat_1', 'zhangsan');
+      expect(onInbound.mock.calls.map((c) => c[0].sender.role)).toEqual(['STAFF_CS', 'STAFF_OTHER']);
     });
 
     it('结构化日志打印方法调用不报错', () => {

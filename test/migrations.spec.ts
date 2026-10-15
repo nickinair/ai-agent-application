@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { compareMigrations, loadMigrations, pendingMigrations } from '../src/database/migrations';
+import { compareMigrations, EQUIVALENT_CHECKSUMS, loadMigrations, pendingMigrations } from '../src/database/migrations';
 
 describe('迁移文件', () => {
   const dir = join(__dirname, '../database/migrations');
@@ -23,6 +23,14 @@ describe('迁移文件', () => {
     const files = loadMigrations(dir);
     const applied = new Map([[files[0].version, 'changed']]);
     expect(() => pendingMigrations(files, applied)).toThrow('内容被修改');
+  });
+
+  it('001 曾被改过（加 void_reason）：执行过改动版的库也认可，该列由 004 补上', () => {
+    const files = loadMigrations(dir);
+    const applied = new Map([[files[0].version, EQUIVALENT_CHECKSUMS['V1.0.0-001-init.sql'][0]]]);
+    expect(pendingMigrations(files, applied).map((f) => f.version)).toContain('V1.0.0-004-turn-void-reason.sql');
+    expect(files[0].sql).not.toContain('void_reason');
+    expect(files.find((f) => f.version === 'V1.0.0-004-turn-void-reason.sql')?.sql).toContain('information_schema.COLUMNS');
   });
 
   it('仓库里的迁移文件都能被识别，且 001 建核心表', () => {

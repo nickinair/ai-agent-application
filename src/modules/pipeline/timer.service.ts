@@ -397,6 +397,12 @@ export class TimerService implements OnModuleInit {
     // 若属于完结收尾（CLOSE_IDLE），标记 resolved = 1
     if (data.kind === 'CLOSE') {
       await pool.query('UPDATE conversation SET resolved = 1 WHERE id = ?', [data.convId]);
+    } else {
+      // 普通空闲结束（Q14）：客户不再回复默认已解决；转过人工的以客服回填为准，已有结论的不覆盖
+      await pool.query(
+        'UPDATE conversation SET resolved = 1 WHERE id = ? AND resolved IS NULL AND handoff = 0',
+        [data.convId],
+      );
     }
 
     // 清理 Redis 活跃会话映射及相关资源

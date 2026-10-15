@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { WecomBotService } from './wecom-bot.service';
 import { WecomGroupMessageService } from './wecom-group-message.service';
+import { WecomMemberRoleService } from './wecom-member-role.service';
 import { WecomController } from './wecom.controller';
 import { ENV, loadEnv } from '../../config/env';
 import { PipelineModule } from '../pipeline/pipeline.module';
@@ -15,6 +16,7 @@ import { PipelineModule } from '../pipeline/pipeline.module';
     },
     WecomGroupMessageService,
     WecomBotService,
+    WecomMemberRoleService,
   ],
   exports: [WecomBotService, WecomGroupMessageService],
 })

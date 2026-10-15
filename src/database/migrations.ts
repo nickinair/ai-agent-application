@@ -35,12 +35,22 @@ export function loadMigrations(dir: string): MigrationFile[] {
 }
 
 /**
+ * 历史上被改过、已恢复原样的迁移文件：改动版执行过的库也认可（改动内容已由后续迁移以可重复执行的方式补上）。
+ * V1.0.0-001：曾直接加 turn.void_reason 一列，已恢复原样，该列改由 V1.0.0-004 添加。
+ */
+export const EQUIVALENT_CHECKSUMS: Record<string, string[]> = {
+  'V1.0.0-001-init.sql': ['20479bf595a4b419f0f1d9dc2a202931683002f13e21b94a2e26657627782236'],
+};
+
+/**
  * 计算待执行的迁移；已执行文件的内容被改过时直接报错（MySQL DDL 不能回滚，改历史文件会让各环境结构不一致）。
  */
 export function pendingMigrations(files: MigrationFile[], applied: Map<string, string>): MigrationFile[] {
   for (const f of files) {
     const old = applied.get(f.version);
-    if (old && old !== f.checksum) throw new Error(`迁移文件 ${f.version} 已执行过但内容被修改，请新增迁移文件`);
+    if (old && old !== f.checksum && !EQUIVALENT_CHECKSUMS[f.version]?.includes(old)) {
+      throw new Error(`迁移文件 ${f.version} 已执行过但内容被修改，请新增迁移文件`);
+    }
   }
   return files.filter((f) => !applied.has(f.version));
 }

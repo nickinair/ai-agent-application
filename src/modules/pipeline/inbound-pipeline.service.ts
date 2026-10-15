@@ -13,6 +13,7 @@ import { BufferService } from './buffer.service';
 import { TimerService } from './timer.service';
 import { SealerService } from './sealer.service';
 import { MicrophoneService } from './microphone.service';
+import { PlaceholderService } from './placeholder.service';
 import { StateTransitionService } from './state-transition.service';
 import { CHANNEL_ADAPTER, type ChannelAdapter, type InboundMessage } from '../../contracts';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -43,6 +44,7 @@ export class InboundPipelineService {
     @Optional() private readonly microphoneService?: MicrophoneService,
     @Optional() private readonly stateTransitionService?: StateTransitionService,
     @Optional() @Inject(CHANNEL_ADAPTER) private readonly channelAdapter?: ChannelAdapter,
+    @Optional() private readonly placeholderService?: PlaceholderService,
   ) {}
 
   /**
@@ -155,6 +157,11 @@ export class InboundPipelineService {
     this.logger.log(
       `📥 客户消息入缓冲池 [convId=${convId}, sender=${senderId}, count=${meta.count}, version=${meta.version}, isFirst=${meta.isFirst}]`,
     );
+
+    // 会话首条客户消息：预约占位应答（每个会话只发一次，Q10）
+    await this.placeholderService
+      ?.onCustomerMessage(msg.tenantId, convId, senderId)
+      .catch((err: Error) => this.logger.warn(`预约占位应答失败: ${err.message}`));
 
     // 检查是否达到条数阈值立即封组（默认 5 条）
     if (meta.count >= this.env.GROUP_MAX_MESSAGES) {

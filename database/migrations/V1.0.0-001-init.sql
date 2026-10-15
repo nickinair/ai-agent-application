@@ -240,7 +240,6 @@ CREATE TABLE turn (
   reply_text         TEXT         NULL COMMENT '回复内容详情',
   reply_confidence   DECIMAL(4,3) NULL COMMENT '内容置信度',
   reply_status       VARCHAR(16)  NULL COMMENT 'SENT/VOIDED/SEND_FAILED/DEGRADED',
-  void_reason        VARCHAR(32)  NULL COMMENT '作废原因：MIC_SEIZED/RECOMPUTE_ABANDONED/RULE_BLOCKED',
   reply_msg_id       BIGINT UNSIGNED NULL,
   low_confidence     TINYINT      NOT NULL DEFAULT 0,
   handoff_triggered  TINYINT      NOT NULL DEFAULT 0,

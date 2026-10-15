@@ -15,6 +15,7 @@ import { WatchdogService } from './watchdog.service';
 import { MicrophoneService } from './microphone.service';
 import { FinalCheckService } from './final-check.service';
 import { MetricsService } from '../../infra/metrics.service';
+import { PlaceholderService } from './placeholder.service';
 
 @Module({
   providers: [
@@ -28,6 +29,7 @@ import { MetricsService } from '../../infra/metrics.service';
     MicrophoneService,
     FinalCheckService,
     MetricsService,
+    PlaceholderService,
   ],
   exports: [
     BufferService,
@@ -40,6 +42,7 @@ import { MetricsService } from '../../infra/metrics.service';
     MicrophoneService,
     FinalCheckService,
     MetricsService,
+    PlaceholderService,
   ],
 })
 export class PipelineModule {}

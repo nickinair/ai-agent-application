@@ -1,13 +1,10 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { BaseMessage, WsFrame, WSClient } from '@wecom/aibot-node-sdk';
-import { generateReqId } from '@wecom/aibot-node-sdk';
 import { ENV, type Env } from '../../config/env';
 import { InboundPipelineService } from '../pipeline/inbound-pipeline.service';
+import { WecomMemberRoleService } from './wecom-member-role.service';
 import type { InboundMessage } from '../../contracts';
-import type {
-  WecomGroupMessageHandler,
-  WecomIncomingMessage,
-} from './types/wecom.types';
+import type { WecomIncomingMessage } from './types/wecom.types';
 
 @Injectable()
 export class WecomGroupMessageService {
@@ -17,9 +14,6 @@ export class WecomGroupMessageService {
   private readonly processedMsgIds = new Map<string, number>();
   private readonly MSG_CACHE_TTL_MS = 10 * 60 * 1000;
   private readonly MAX_CACHE_SIZE = 5000;
-
-  /** 业务处理器钩子列表 */
-  private readonly handlers: WecomGroupMessageHandler[] = [];
 
   /** 消息收发统计指标 */
   private stats = {
@@ -32,18 +26,8 @@ export class WecomGroupMessageService {
   constructor(
     @Inject(ENV) private readonly env: Env,
     @Optional() private readonly pipelineService?: InboundPipelineService,
+    @Optional() private readonly memberRoles?: WecomMemberRoleService,
   ) {}
-
-  /**
-   * 注册自定义群聊消息处理器（如大模型调用、业务 Agent 流式处理等）
-   */
-  registerHandler(handler: WecomGroupMessageHandler): () => void {
-    this.handlers.push(handler);
-    return () => {
-      const idx = this.handlers.indexOf(handler);
-      if (idx !== -1) this.handlers.splice(idx, 1);
-    };
-  }
 
   /**
    * 清洗群聊中的 @ 标记，提取纯文本
@@ -249,17 +233,23 @@ export class WecomGroupMessageService {
     // 1. 结构化打印完整消息 Log
     this.logIncomingMessage(parsed);
 
-    // 2. 注入平台核心缓冲流水线（第 1 关「收」）
+    // 2. 识别租户与发送人角色，注入平台核心缓冲流水线（第 1 关「收」）。
+    //    回复一律由流水线（核心服务理解 + 发送端）发出，这里不再本地应答。
     if (this.pipelineService) {
       try {
+        const tenantId = this.memberRoles ? await this.memberRoles.tenantId() : 1;
+        const member = this.memberRoles
+          ? await this.memberRoles.resolve(tenantId, 'wecom_group', parsed.chatId, parsed.userId)
+          : { role: 'CUSTOMER' as const };
+        if (member.role === 'BOT') return;
         const inboundMsg: InboundMessage = {
-          tenantId: 1,
+          tenantId,
           channel: 'wecom_group',
           channelChatId: parsed.chatId,
           channelMsgId: parsed.msgId,
           chatName: (parsed as any).chatName,
           sender: {
-            role: 'CUSTOMER',
+            role: member.role,
             channelUserId: parsed.userId,
           },
           mentions: [],
@@ -272,114 +262,6 @@ export class WecomGroupMessageService {
       } catch (err: any) {
         this.logger.error(`投递核心流水线异常: ${err.message}`, err.stack);
       }
-    }
-
-    try {
-      // 3. 策略分流与本地原型应答：
-      // 非文本与语音类型的多媒体消息 -> 自动执行转人工处理（@客服标记的所有用户）
-      if (parsed.requiresHumanHandoff) {
-        await this.handleHandoffReply(client, parsed);
-        return;
-      }
-
-      // 文本与语音消息 -> 智能应答逻辑（自定义处理器或默认流式打字机）
-      if (this.handlers.length > 0) {
-        for (const handler of this.handlers) {
-          const replyText = await handler(parsed);
-          if (replyText) {
-            await this.replyStream(client, frame, replyText, true);
-          }
-        }
-      } else {
-        await this.handleDefaultReply(client, parsed);
-      }
-    } catch (error) {
-      this.logger.error(
-        `处理或回复企微群聊消息失败: ${(error as Error).message}`,
-        (error as Error).stack,
-      );
-    }
-  }
-
-  /**
-   * 转人工处理回复：在群内提示并 @客服标记的所有用户
-   */
-  async handleHandoffReply(client: WSClient, msg: WecomIncomingMessage): Promise<void> {
-    const streamId = generateReqId('stream_handoff');
-    const staffMentions = this.env.WECOM_STAFF_MENTIONS || '@客服';
-
-    const handoffContent = [
-      `🤖 收到您发送的**${this.getMsgTypeLabel(msg.msgType)}**消息。`,
-      `当前暂不支持直接识别该类型，已为您转接人工客服处理。`,
-      ``,
-      `请稍候，${staffMentions} 老师请跟进支持！`,
-    ].join('\n');
-
-    await client.replyStream(msg.rawFrame, streamId, handoffContent, true);
-
-    this.stats.handoffCount++;
-    this.stats.repliedCount++;
-    this.logger.log(
-      `🛎️ [转人工提醒] 已向群 [${msg.chatId}] 发送转人工应答，并提醒客服人员: ${staffMentions}`,
-    );
-  }
-
-  /**
-   * 默认回复：模拟流式打字机应答（用于文本和语音消息）
-   */
-  private async handleDefaultReply(client: WSClient, msg: WecomIncomingMessage): Promise<void> {
-    const streamId = generateReqId('stream');
-    const typeLabel = msg.msgType === 'voice' ? '语音转写' : '文本';
-
-    // 1. 发送思考中的中间状态（finish = false）
-    await client.replyStream(msg.rawFrame, streamId, '🤖 正在思考...', false);
-
-    // 2. 发送最终回复内容（finish = true）
-    const replyContent = [
-      `已收到您的群聊${typeLabel}消息：`,
-      `> ${msg.cleanedContent || '(空内容)'}`,
-      ``,
-      `*企业微信群聊智能机器人模块接入正常运行中。*`,
-    ].join('\n');
-
-    await client.replyStream(msg.rawFrame, streamId, replyContent, true);
-
-    this.stats.repliedCount++;
-    this.logger.log(`成功回复企微群聊消息 [群ID=${msg.chatId}] [类型=${msg.msgType}]`);
-  }
-
-  /**
-   * 辅助方法：获取消息类型的中文描述
-   */
-  private getMsgTypeLabel(msgType: string): string {
-    switch (msgType) {
-      case 'image':
-        return '图片';
-      case 'file':
-        return '文件';
-      case 'video':
-        return '视频';
-      case 'mixed':
-        return '图文混排';
-      default:
-        return '多媒体';
-    }
-  }
-
-  /**
-   * 便捷流式回复封装
-   */
-  async replyStream(
-    client: WSClient,
-    frame: WsFrame<BaseMessage>,
-    content: string,
-    finish = true,
-    streamId?: string,
-  ): Promise<void> {
-    const sid = streamId || generateReqId('stream');
-    await client.replyStream(frame, sid, content, finish);
-    if (finish) {
-      this.stats.repliedCount++;
     }
   }
 
