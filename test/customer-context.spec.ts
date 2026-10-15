@@ -65,6 +65,16 @@ describe('客户上下文装配测试 (CustomerContextService)', () => {
       expect(parsed.bought).toBeUndefined();
     });
 
+    it('匹配 3 段式产品群名：姓名-手机号-产品', () => {
+      const parsed = service.parseGroupName('赵女士-13900001111-整车延保');
+
+      expect(parsed.name).toBe('赵女士');
+      expect(parsed.phone).toBe('13900001111');
+      expect(parsed.phoneMasked).toBe('139****1111');
+      expect(parsed.product).toBe('整车延保');
+      expect(parsed.bought).toBeUndefined();
+    });
+
     it('非法或空群名应返回空对象，不抛出异常', () => {
       expect(service.parseGroupName('')).toEqual({});
       expect(service.parseGroupName('VIP优质客户交流群')).toEqual({});

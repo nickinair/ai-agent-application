@@ -58,6 +58,8 @@ export class CustomerContextService {
     /^(?<name>[^-]+)-(?<phone>1\d{10})-(?<product>[^-]+)-(?<bought>已购|未购)$/,
     // 4 段且末段为产品: 姓名-手机-车型-产品
     /^(?<name>[^-]+)-(?<phone>1\d{10})-(?<vehicle>[^-]+)-(?<product>[^-]+)$/,
+    // 3 段且末段包含产品特征词: 姓名-手机-产品 (如: 赵女士-13900001111-整车延保)
+    /^(?<name>[^-]+)-(?<phone>1\d{10})-(?<product>[^-]*(?:延保|保|险|套餐|桩|服务)[^-]*)$/,
     // 3 段: 姓名-手机-车型
     /^(?<name>[^-]+)-(?<phone>1\d{10})-(?<vehicle>[^-]+)$/,
     // 兜底提取手机号与姓名
@@ -212,6 +214,7 @@ export class CustomerContextService {
 
     return {
       name: customerName,
+      phone: parsed.phone,
       phoneMasked,
       vehicle: vehicles[0]?.model || parsed.vehicle,
       product: parsed.product,

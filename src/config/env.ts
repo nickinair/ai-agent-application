@@ -41,6 +41,12 @@ const EnvSchema = z.object({
   WECOM_STAFF_MENTIONS: z.string().default('@客服'),
   /** 与会话内容存档 Sidecar 内部通信的鉴权 Token (可选) */
   WECOM_SIDECAR_TOKEN: z.string().optional(),
+  /** 企业微信接收事件服务器 Token (用于 Webhook 回调 URL 验签，默认提供当前后台临时 Token) */
+  WECOM_CALLBACK_TOKEN: z.string().default('4RP'),
+  /** 企业微信接收事件服务器 EncodingAESKey (43位 Base64) */
+  WECOM_CALLBACK_AES_KEY: z.string().default('KLW9jBbvR3Jj1fC4Ujxr2KXeeHdeDMoli6nQZq2hEeq'),
+  /** 企业微信 CorpID */
+  WECOM_CORPID: z.string().optional(),
 
   // =========================================================================
   // Redis 与 BullMQ 队列基础设施配置（§7.1、§7.2）
@@ -83,7 +89,15 @@ const EnvSchema = z.object({
 });
 
 /** 管理 API 与配置通知用的字段（倪开）在类型上可选：运行时由 loadEnv 填默认值，单测手写的 Env 对象不必带上 */
-type ApiEnvKeys = 'NODE_ENV' | 'REDIS_URL' | 'JWT_SECRET' | 'JWT_TTL_SECONDS' | 'TEST_INJECT_ENABLED' | 'TEST_TENANT_ID';
+type ApiEnvKeys =
+  | 'NODE_ENV'
+  | 'REDIS_URL'
+  | 'JWT_SECRET'
+  | 'JWT_TTL_SECONDS'
+  | 'TEST_INJECT_ENABLED'
+  | 'TEST_TENANT_ID'
+  | 'WECOM_CALLBACK_TOKEN'
+  | 'WECOM_CALLBACK_AES_KEY';
 export type Env = Omit<z.infer<typeof EnvSchema>, ApiEnvKeys> & Partial<Pick<z.infer<typeof EnvSchema>, ApiEnvKeys>>;
 
 let envFilesLoaded = false;
