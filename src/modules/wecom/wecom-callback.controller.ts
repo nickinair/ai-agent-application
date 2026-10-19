@@ -18,12 +18,10 @@ import {
   Req,
   Res,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
 import { Public } from '../../auth/tenant-context';
 import { ENV, type Env } from '../../config/env';
 import { InboundPipelineService } from '../pipeline/inbound-pipeline.service';
 import { WecomCrypto } from './crypto/wecom-crypto';
-import type { InboundMessage } from '../../contracts';
 import { GatewayConfigService } from '../../infra/gateway/gateway-config.service';
 
 @Controller('api/wecom')
@@ -91,7 +89,7 @@ export class WecomCallbackController {
 
   /**
    * 2. 接收企业微信推送的加密消息与事件回调 (POST)
-   * 解密 XML 报文，提取发送人、群ID与内容，转化为 InboundMessage 投递进入缓冲池流水线
+   * 解密 XML 报文并记录（群消息由智能机器人长连接收，回调不进流水线；客户入群、手机号授权等事件后续在这里处理）
    */
   @Public()
   @Post('callback')
@@ -143,34 +141,11 @@ export class WecomCallbackController {
       const parsed = this.parseSimpleXml(decryptedXml);
       const msgType = parsed.MsgType;
 
-      if (msgType === 'text') {
-        const fromUser = parsed.FromUserName || 'UNKNOWN';
-        const chatId = parsed.ChatId || parsed.FromUserName || 'single_chat';
-        const content = parsed.Content || '';
-        const msgId = parsed.MsgId || `wecom-${randomUUID()}`;
-        const sentAt = parsed.CreateTime ? Number(parsed.CreateTime) * 1000 : Date.now();
-
-        const inboundMsg: InboundMessage = {
-          tenantId: this.env.WECOM_TENANT_ID ?? 1,
-          channel: parsed.ChatId ? 'wecom_group' : 'wecom_single',
-          channelChatId: chatId,
-          channelMsgId: msgId,
-          sender: {
-            channelUserId: fromUser,
-            role: 'CUSTOMER',
-            name: fromUser,
-          },
-          type: 'text',
-          text: content,
-          mentions: [],
-          sentAt,
-        };
-
-        // 异步送入统一入站流水线（进入 3s 静默缓冲池与封组状态机）
-        await this.inboundService.onInbound(inboundMsg);
-      } else {
-        this.logger.log(`收到非文本消息/事件: MsgType=${msgType}, Event=${parsed.Event}, 暂不入缓冲池`);
-      }
+      // 群消息（客户、客服、销售的发言）统一由智能机器人长连接收，再走身份识别进流水线；
+      // 这里再收一遍会重复处理，而且回调里的文本多是员工在自建应用里的单聊，不能当客户消息。只记日志。
+      this.logger.log(
+        `收到企微回调：MsgType=${msgType}${parsed.Event ? `, Event=${parsed.Event}` : ''}${parsed.ChangeType ? `, ChangeType=${parsed.ChangeType}` : ''}，不进流水线`,
+      );
 
       // 企业微信要求接收成功必须返回明文 success 或空字符串
       res.status(HttpStatus.OK).type('text/plain').send('success');

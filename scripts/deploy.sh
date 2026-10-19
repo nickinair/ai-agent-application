@@ -5,6 +5,8 @@
 #   1. sidecar/gateway       - a3 专属服务注册发现与配置中心 (端口: 3003)
 #   2. ai-agent-application  - a3 主应用核心后端 (端口: 3002)
 #   3. sidecar/wecom-finance - 企微会话存档全量感知伴生服务 (后台工作进程)
+#   4. crm-ai-agent (Core)   - Agent 核心服务：封组之后的理解与组织回复 (端口: 3001，仅本机)
+#                              代码在同级目录 ../crm-ai-agent（可用 CORE_DIR 指定）
 # 支持环境:
 #   本地环境: local (默认对接 host.docker.internal)
 #   测试环境: test
@@ -30,6 +32,8 @@ divider() { echo -e "\033[1;30m-------------------------------------------------
 GW_DIR="${ROOT_DIR}/sidecar/gateway"
 A3_DIR="${ROOT_DIR}"
 FIN_DIR="${ROOT_DIR}/sidecar/wecom-finance"
+# Agent 核心服务（crm-ai-agent 仓库，与本仓库放在同一目录下）
+CORE_DIR="${CORE_DIR:-$(cd "${ROOT_DIR}/.." && pwd)/crm-ai-agent}"
 
 # 参数默认值
 ACTION=""
@@ -416,31 +420,36 @@ interactive_runner() {
   # ----------------------------------------------------------------------------
   # 【第三级：部署的应用组件 (多选，空格+Tab对齐)】
   # ----------------------------------------------------------------------------
-  local comp_checked=(1 1 1)
+  local comp_checked=(1 1 1 1)
   local comp_labels=(
     "1. 🚪 专属微服务网关 (Gateway)   	- 服务注册发现与配置中心 (:3003)"
-    "2. 🤖 A3 主应用核心后端 (A3 App) 	- 会话治理/防抖聚合/抢话筒仲裁 (:3002)"
-    "3. 💬 企微会话存档服务 (Finance)  	- 外部群全量无感感知 Worker (后台守护)"
+    "2. 🧠 Agent 核心服务 (Core)      	- 封组后的理解与组织回复 (:3001)"
+    "3. 🤖 A3 主应用核心后端 (A3 App) 	- 会话治理/防抖聚合/抢话筒仲裁 (:3002)"
+    "4. 💬 企微会话存档服务 (Finance)  	- 外部群全量无感感知 Worker (后台守护)"
   )
 
   menu_multi_select "请选择需要部署的应用组件 (空格键多选/取消，回车确认启动):" comp_checked comp_labels
 
   # 映射选中的组件
   local sel_gw=${comp_checked[0]}
-  local sel_a3=${comp_checked[1]}
-  local sel_fin=${comp_checked[2]}
+  local sel_core=${comp_checked[1]}
+  local sel_a3=${comp_checked[2]}
+  local sel_fin=${comp_checked[3]}
+  local sel_sum=$((sel_gw + sel_core + sel_a3 + sel_fin))
 
-  if [[ $sel_gw -eq 1 && $sel_a3 -eq 1 && $sel_fin -eq 1 ]]; then
+  if [[ $sel_sum -eq 4 ]]; then
     TARGET="all"
-  elif [[ $sel_gw -eq 1 && $sel_a3 -eq 0 && $sel_fin -eq 0 ]]; then
+  elif [[ $sel_sum -eq 1 && $sel_gw -eq 1 ]]; then
     TARGET="gateway"
-  elif [[ $sel_gw -eq 0 && $sel_a3 -eq 1 && $sel_fin -eq 0 ]]; then
+  elif [[ $sel_sum -eq 1 && $sel_core -eq 1 ]]; then
+    TARGET="core"
+  elif [[ $sel_sum -eq 1 && $sel_a3 -eq 1 ]]; then
     TARGET="a3"
-  elif [[ $sel_gw -eq 0 && $sel_a3 -eq 0 && $sel_fin -eq 1 ]]; then
+  elif [[ $sel_sum -eq 1 && $sel_fin -eq 1 ]]; then
     TARGET="finance"
   else
-    # 组合部分，如选中了 gateway 和 a3
-    TARGET="custom_${sel_gw}_${sel_a3}_${sel_fin}"
+    # 组合部分，如选中了 gateway、core 和 a3
+    TARGET="custom_${sel_gw}_${sel_core}_${sel_a3}_${sel_fin}"
   fi
 
   echo -e "\033[1;32m✔\033[0m 已选定微服务组件，即将启动部署流程...\n"
@@ -460,7 +469,7 @@ interactive_runner() {
 
 show_help() {
   cat << EOF
-a3 体系 (主应用 + 网关 + 会话存档) 单宿主机 Docker 整合部署管理脚本
+a3 体系 (主应用 + 网关 + 核心服务 + 会话存档) 单宿主机 Docker 整合部署管理脚本
 
 用法:
   交互式运行: ./deploy.sh
@@ -492,8 +501,9 @@ a3 体系 (主应用 + 网关 + 会话存档) 单宿主机 Docker 整合部署�
   prod           生产环境 (使用各模块 .env.prod 配置)
 
 可用目标 (target):
-  all            (默认) 全量三个容器 (Gateway -> A3 -> Finance)
+  all            (默认) 全量四个容器 (Gateway -> Core -> A3 -> Finance)
   gateway        仅针对专属网关 (sidecar/gateway)
+  core           仅针对 Agent 核心服务 (../crm-ai-agent，理解与组织回复)
   a3             仅针对 a3 主应用 (ai-agent-application)
   finance        仅针对会话存档 (sidecar/wecom-finance)
 
@@ -544,7 +554,7 @@ parse_args() {
         ENV="$1"
         shift
         ;;
-      all|gateway|a3|finance)
+      all|gateway|core|a3|finance)
         TARGET="$1"
         shift
         ;;
@@ -609,6 +619,54 @@ setup_vars() {
   # 企微会话存档配置
   FIN_IMAGE="wecom-finance-sidecar:${ENV}"
   FIN_CONTAINER="a3-finance-${ENV}"
+
+  # Agent 核心服务配置（只监听本机，不对外）
+  CORE_IMAGE="crm-ai-agent:${ENV}"
+  CORE_CONTAINER="a3-core-${ENV}"
+  CORE_PORT=3001
+  CORE_HEALTH_URL="http://127.0.0.1:${CORE_PORT}/health"
+}
+
+# 按约定顺序找组件的 env 文件：.env.${ENV}.local > .env.local > .env.${ENV} > .env（找不到输出空）
+pick_env_file() {
+  local dir="$1" f
+  for f in "${dir}/.env.${ENV}.local" "${dir}/.env.local" "${dir}/.env.${ENV}" "${dir}/.env"; do
+    if [[ -f "$f" ]]; then
+      echo "$f"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# env 文件里是否显式配置了某个键（值非空）。配置了就以 env 文件为准，脚本不再用 -e 传默认值
+# （docker run 的 -e 优先级高于 --env-file，传了默认值会把 env 文件里的值盖掉）
+env_file_has() {
+  local file="$1" key="$2"
+  [[ -n "$file" && -f "$file" ]] && grep -Eq "^[[:space:]]*${key}=[^[:space:]]" "$file"
+}
+
+# 读 env 文件里某个键的值（去掉引号），只用于比较，不打印
+env_file_get() {
+  local file="$1" key="$2"
+  [[ -n "$file" && -f "$file" ]] || return 0
+  grep -E "^[[:space:]]*${key}=" "$file" | tail -n 1 | cut -d= -f2- | sed -e 's/^[\"'\'']//' -e 's/[\"'\'']$//'
+}
+
+# 核心服务与 A3 主应用必须连同一个 Redis 的同一个库（封组 / 回复队列在里面交接），不一致直接停止部署
+check_same_redis() {
+  local a3_file core_file a3_url core_url
+  a3_file="$(pick_env_file "$A3_DIR")"
+  core_file="$(pick_env_file "$CORE_DIR")"
+  a3_url="$(env_file_get "$a3_file" REDIS_URL)"
+  core_url="$(env_file_get "$core_file" REDIS_URL)"
+  if [[ -n "$a3_url" && -n "$core_url" && "$a3_url" != "$core_url" ]]; then
+    error "核心服务与 A3 主应用的 REDIS_URL 不一致（${core_file} / ${a3_file}）：两边必须连同一个 Redis 的同一个库，否则机器人收到消息后永远不会回复。"
+    exit 1
+  fi
+  if [[ -n "$a3_url" && -z "$core_url" ]] || [[ -z "$a3_url" && -n "$core_url" ]]; then
+    warn "只有一边的 env 文件配了 REDIS_URL（核心服务: ${core_file:-无} / A3: ${a3_file:-无}），请确认两边连的是同一个 Redis 的同一个库。"
+  fi
 }
 
 ensure_network() {
@@ -631,6 +689,16 @@ build_image_a3() {
   succ "A3 主应用镜像构建完成: ${A3_IMAGE}"
 }
 
+build_image_core() {
+  if [[ ! -f "${CORE_DIR}/Dockerfile" ]]; then
+    error "找不到 Agent 核心服务代码：${CORE_DIR}（crm-ai-agent 需与本仓库放在同一目录下，或用 CORE_DIR 指定路径）"
+    exit 1
+  fi
+  info "正在构建 Agent 核心服务镜像 [${CORE_IMAGE}]..."
+  (cd "$CORE_DIR" && docker build -t "$CORE_IMAGE" -f Dockerfile .)
+  succ "核心服务镜像构建完成: ${CORE_IMAGE}"
+}
+
 build_image_finance() {
   info "正在构建企微会话存档镜像 [${FIN_IMAGE}]..."
   (cd "$FIN_DIR" && docker build -t "$FIN_IMAGE" -f Dockerfile .)
@@ -643,6 +711,9 @@ build_targets() {
     gateway)
       build_image_gateway
       ;;
+    core)
+      build_image_core
+      ;;
     a3)
       build_image_a3
       ;;
@@ -651,6 +722,7 @@ build_targets() {
       ;;
     all)
       build_image_gateway
+      build_image_core
       build_image_a3
       build_image_finance
       ;;
@@ -758,7 +830,7 @@ deploy_gateway() {
     --network "$NETWORK" \
     --network-alias a3-gateway \
     --restart unless-stopped \
-    -p "${GW_PORT}:3003" \
+    -p "127.0.0.1:${GW_PORT}:3003" \
     --add-host=host.docker.internal:host-gateway \
     -e "NODE_ENV=${ENV}" \
     -e "PORT=3003" \
@@ -768,6 +840,52 @@ deploy_gateway() {
 
   bridge_middleware_network "$GW_CONTAINER"
   wait_for_health "$GW_HEALTH_URL" "Gateway" 30 || true
+}
+
+deploy_core() {
+  info "==> 开始部署 Agent 核心服务: ${CORE_CONTAINER} (端口: ${CORE_PORT}，只监听本机)"
+  build_image_core
+  check_same_redis
+  stop_single_container "$CORE_CONTAINER"
+
+  local core_env_file
+  core_env_file="$(pick_env_file "$CORE_DIR")"
+  local env_opts=()
+  if [[ -n "$core_env_file" ]]; then
+    env_opts+=("--env-file" "$core_env_file")
+  fi
+
+  # 中间件默认地址（env 文件里配了就以 env 文件为准）：有 agent-platform 中间件网络时用容器名，否则用宿主机
+  local mw_host="mysql" redis_host="redis" qdrant_host="qdrant"
+  if ! docker network inspect "agent-platform_default" &>/dev/null; then
+    mw_host="host.docker.internal"
+    redis_host="host.docker.internal"
+    qdrant_host="host.docker.internal"
+  fi
+  local mw_opts=()
+  env_file_has "$core_env_file" MYSQL_URL || mw_opts+=("-e" "MYSQL_URL=mysql://agent:agent_pw@${mw_host}:3306/agent_platform")
+  env_file_has "$core_env_file" REDIS_URL || mw_opts+=("-e" "REDIS_URL=redis://${redis_host}:6379")
+  env_file_has "$core_env_file" QDRANT_URL || mw_opts+=("-e" "QDRANT_URL=http://${qdrant_host}:6333")
+  env_file_has "$core_env_file" GATEWAY_URL || mw_opts+=("-e" "GATEWAY_URL=http://a3-gateway:3003")
+
+  # 封组后的理解与回复固定走队列；临时直通模式已停用（RabbitMQ 不再需要）
+  docker run -d \
+    --name "$CORE_CONTAINER" \
+    --network "$NETWORK" \
+    --network-alias a3-core \
+    --restart unless-stopped \
+    -p "127.0.0.1:${CORE_PORT}:3001" \
+    --add-host=host.docker.internal:host-gateway \
+    -e "NODE_ENV=${ENV}" \
+    -e "PORT=3001" \
+    -e "TURN_QUEUE_ENABLED=true" \
+    -e "PIPELINE_DIRECT=false" \
+    "${mw_opts[@]}" \
+    "${env_opts[@]}" \
+    "$CORE_IMAGE"
+
+  bridge_middleware_network "$CORE_CONTAINER"
+  wait_for_health "$CORE_HEALTH_URL" "Core" 40 || true
 }
 
 deploy_a3() {
@@ -802,6 +920,15 @@ deploy_a3() {
     default_redis_host="host.docker.internal"
   fi
 
+  # env 文件里配了数据库 / Redis 就以它为准（-e 会盖掉 --env-file 的同名值）
+  local a3_env_file
+  a3_env_file="$(pick_env_file "$A3_DIR")"
+  local mysql_opts=() redis_opts=()
+  env_file_has "$a3_env_file" MYSQL_URL || mysql_opts+=("-e" "MYSQL_URL=${default_mysql_url}")
+  if ! env_file_has "$a3_env_file" REDIS_URL && ! env_file_has "$a3_env_file" REDIS_HOST; then
+    redis_opts+=("-e" "REDIS_URL=${default_redis_url}" "-e" "REDIS_HOST=${default_redis_host}")
+  fi
+
   if [[ "$SKIP_MIGRATE" != "true" ]]; then
     info "检测数据库表结构，执行容器化自动迁移..."
     local migrate_net="$NETWORK"
@@ -813,7 +940,7 @@ deploy_a3() {
       --network "$migrate_net" \
       --add-host=host.docker.internal:host-gateway \
       "${env_opts[@]}" \
-      -e "MYSQL_URL=${default_mysql_url}" \
+      "${mysql_opts[@]}" \
       "$A3_IMAGE" node dist/database/migrate.js 2>&1 || warn "数据库迁移跳过或连接失败，继续执行应用部署..."
   fi
 
@@ -828,9 +955,8 @@ deploy_a3() {
     -e "PORT=3002" \
     -e "GATEWAY_ENABLED=true" \
     -e "GATEWAY_URL=http://a3-gateway:3003" \
-    -e "MYSQL_URL=${default_mysql_url}" \
-    -e "REDIS_URL=${default_redis_url}" \
-    -e "REDIS_HOST=${default_redis_host}" \
+    "${mysql_opts[@]}" \
+    "${redis_opts[@]}" \
     "${env_opts[@]}" \
     "$A3_IMAGE"
 
@@ -861,7 +987,7 @@ deploy_finance() {
     -e "NODE_ENV=${ENV}" \
     -e "GATEWAY_ENABLED=true" \
     -e "GATEWAY_URL=http://a3-gateway:3003" \
-    -e "A3_WEBHOOK_URL=http://a3-app:3002/api/wecom/finance/callback" \
+    -e "A3_WEBHOOK_URL=http://a3-app:3002/api/admin/wecom/finance-inbound" \
     -v "${FIN_DIR}/data:/app/data" \
     -v "${FIN_DIR}/keys:/app/keys" \
     -v "${FIN_DIR}/lib:/app/lib" \
@@ -878,6 +1004,9 @@ execute_deploy() {
     gateway)
       deploy_gateway
       ;;
+    core)
+      deploy_core
+      ;;
     a3)
       deploy_a3
       ;;
@@ -885,21 +1014,24 @@ execute_deploy() {
       deploy_finance
       ;;
     all)
-      info "🚀 开始按依赖拓扑顺序部署 A3 全量套件 (网关 -> 主应用 -> 会话存档)..."
+      info "🚀 开始按依赖拓扑顺序部署 A3 全量套件 (网关 -> 核心服务 -> 主应用 -> 会话存档)..."
       deploy_gateway
+      deploy_core
       deploy_a3
       deploy_finance
       succ "🎉 A3 全量微服务已部署完成！"
       ;;
     custom_*)
       info "🚀 按依赖拓扑启动已勾选组件..."
-      # 解析 custom_gw_a3_fin
+      # 解析 custom_gw_core_a3_fin
       local flags="${TARGET#custom_}"
       local gw_flag="${flags:0:1}"
-      local a3_flag="${flags:2:1}"
-      local fin_flag="${flags:4:1}"
+      local core_flag="${flags:2:1}"
+      local a3_flag="${flags:4:1}"
+      local fin_flag="${flags:6:1}"
 
       if [[ "$gw_flag" -eq 1 ]]; then deploy_gateway; fi
+      if [[ "$core_flag" -eq 1 ]]; then deploy_core; fi
       if [[ "$a3_flag" -eq 1 ]]; then deploy_a3; fi
       if [[ "$fin_flag" -eq 1 ]]; then deploy_finance; fi
       succ "🎉 目标微服务已部署完成！"
@@ -920,7 +1052,7 @@ show_status() {
   echo ""
 
   info "容器运行列表:"
-  docker ps -a --filter "name=^(${GW_CONTAINER}|${A3_CONTAINER}|${FIN_CONTAINER})$" \
+  docker ps -a --filter "name=^(${GW_CONTAINER}|${CORE_CONTAINER}|${A3_CONTAINER}|${FIN_CONTAINER})$" \
     --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}"
 
   echo ""
@@ -931,6 +1063,14 @@ show_status() {
     succ "  • 专属网关 (Gateway:3003):  UP (HTTP 200) -> ${GW_HEALTH_URL}"
   else
     warn "  • 专属网关 (Gateway:3003):  DOWN/UNAVAILABLE (${gw_status}) -> ${GW_HEALTH_URL}"
+  fi
+
+  local core_status
+  core_status="$(curl -s -o /dev/null -w "%{http_code}" "$CORE_HEALTH_URL" 2>/dev/null || echo "CONN_FAIL")"
+  if [[ "$core_status" == "200" ]]; then
+    succ "  • 核心服务 (Core:3001):      UP (HTTP 200) -> ${CORE_HEALTH_URL}"
+  else
+    warn "  • 核心服务 (Core:3001):      DOWN/UNAVAILABLE (${core_status}) -> ${CORE_HEALTH_URL}"
   fi
 
   local a3_status
@@ -957,6 +1097,9 @@ stop_containers() {
     gateway)
       stop_single_container "$GW_CONTAINER"
       ;;
+    core)
+      stop_single_container "$CORE_CONTAINER"
+      ;;
     a3)
       stop_single_container "$A3_CONTAINER"
       ;;
@@ -964,9 +1107,10 @@ stop_containers() {
       stop_single_container "$FIN_CONTAINER"
       ;;
     all|*)
-      info "🛑 正在按逆序关停容器 (Finance -> A3 -> Gateway)..."
+      info "🛑 正在按逆序关停容器 (Finance -> A3 -> Core -> Gateway)..."
       stop_single_container "$FIN_CONTAINER"
       stop_single_container "$A3_CONTAINER"
+      stop_single_container "$CORE_CONTAINER"
       stop_single_container "$GW_CONTAINER"
       succ "所有目标容器已停止并清理。"
       ;;
@@ -982,6 +1126,11 @@ restart_containers() {
       docker restart "$GW_CONTAINER"
       wait_for_health "$GW_HEALTH_URL" "Gateway" 30 || true
       ;;
+    core)
+      info "重启核心服务容器: ${CORE_CONTAINER}..."
+      docker restart "$CORE_CONTAINER"
+      wait_for_health "$CORE_HEALTH_URL" "Core" 30 || true
+      ;;
     a3)
       info "重启 A3 容器: ${A3_CONTAINER}..."
       docker restart "$A3_CONTAINER"
@@ -993,9 +1142,11 @@ restart_containers() {
       wait_for_container_running "$FIN_CONTAINER" "Finance" 15 || true
       ;;
     all|*)
-      info "🔄 重启全量容器 (Gateway -> A3 -> Finance)..."
+      info "🔄 重启全量容器 (Gateway -> Core -> A3 -> Finance)..."
       docker restart "$GW_CONTAINER" 2>/dev/null || true
       wait_for_health "$GW_HEALTH_URL" "Gateway" 20 || true
+      docker restart "$CORE_CONTAINER" 2>/dev/null || true
+      wait_for_health "$CORE_HEALTH_URL" "Core" 20 || true
       docker restart "$A3_CONTAINER" 2>/dev/null || true
       wait_for_health "$A3_HEALTH_URL" "A3-App" 20 || true
       docker restart "$FIN_CONTAINER" 2>/dev/null || true
@@ -1012,6 +1163,10 @@ show_logs() {
       info "追踪网关实时日志 (${GW_CONTAINER})..."
       docker logs -f "$GW_CONTAINER"
       ;;
+    core)
+      info "追踪核心服务实时日志 (${CORE_CONTAINER})..."
+      docker logs -f "$CORE_CONTAINER"
+      ;;
     a3)
       info "追踪 A3 主服务实时日志 (${A3_CONTAINER})..."
       docker logs -f "$A3_CONTAINER"
@@ -1025,6 +1180,8 @@ show_logs() {
       divider
       echo -e "\033[1m--- Gateway 最近日志 ---\033[0m"
       docker logs --tail 10 "$GW_CONTAINER" 2>&1 || true
+      echo -e "\033[1m--- Core 最近日志 ---\033[0m"
+      docker logs --tail 10 "$CORE_CONTAINER" 2>&1 || true
       echo -e "\033[1m--- A3 最近日志 ---\033[0m"
       docker logs --tail 10 "$A3_CONTAINER" 2>&1 || true
       echo -e "\033[1m--- Finance 最近日志 ---\033[0m"
@@ -1050,6 +1207,10 @@ start_containers() {
       docker start "$GW_CONTAINER"
       wait_for_health "$GW_HEALTH_URL" "Gateway" 20 || true
       ;;
+    core)
+      docker start "$CORE_CONTAINER"
+      wait_for_health "$CORE_HEALTH_URL" "Core" 20 || true
+      ;;
     a3)
       docker start "$A3_CONTAINER"
       wait_for_health "$A3_HEALTH_URL" "A3-App" 20 || true
@@ -1062,6 +1223,8 @@ start_containers() {
       info "启动所有已存在容器..."
       docker start "$GW_CONTAINER" 2>/dev/null || true
       wait_for_health "$GW_HEALTH_URL" "Gateway" 20 || true
+      docker start "$CORE_CONTAINER" 2>/dev/null || true
+      wait_for_health "$CORE_HEALTH_URL" "Core" 20 || true
       docker start "$A3_CONTAINER" 2>/dev/null || true
       wait_for_health "$A3_HEALTH_URL" "A3-App" 20 || true
       docker start "$FIN_CONTAINER" 2>/dev/null || true
@@ -1153,6 +1316,26 @@ sync_to_remote() {
     --exclude 'sidecar/wecom-finance/data/*.cursor' \
     "${ROOT_DIR}/" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/"
+
+  # Agent 核心服务代码同步到远端同级目录（远端脚本按 ../crm-ai-agent 找它）
+  if [[ -d "$CORE_DIR" ]]; then
+    local remote_core_dir
+    remote_core_dir="$(dirname "${REMOTE_DIR}")/crm-ai-agent"
+    info "正在同步 Agent 核心服务代码至 ${remote_core_dir}..."
+    run_remote_cmd "mkdir -p '${remote_core_dir}'"
+    rsync -avz --delete \
+      -e "$rsync_ssh_arg" \
+      --exclude 'node_modules' \
+      --exclude '.git' \
+      --exclude 'dist' \
+      --exclude '*.log' \
+      --exclude '.env.local' \
+      --exclude 'deploy/.env' \
+      "${CORE_DIR}/" \
+      "${REMOTE_USER}@${REMOTE_HOST}:${remote_core_dir}/"
+  else
+    warn "本地没有核心服务代码目录 ${CORE_DIR}，跳过同步（远端若无核心服务，机器人不会回复）"
+  fi
 
   succ "增量同步完成！"
   run_remote_cmd "chmod +x '${REMOTE_DIR}/scripts/'*.sh '${REMOTE_DIR}/'*.sh 2>/dev/null || true"
