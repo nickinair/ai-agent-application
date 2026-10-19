@@ -5,9 +5,13 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const express = require('express');
-import { assertApiSecrets, ENV, Env } from './config/env';
+import { loadConfigCenter } from './config/config-center';
+import { assertApiSecrets, ENV, Env, initEnvFiles } from './config/env';
 
 async function bootstrap() {
+  // 先读本地 .env（拿到配置中心地址），再用配置中心的值覆盖，之后各模块 loadEnv 读到的就是合并后的配置
+  initEnvFiles();
+  await loadConfigCenter();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // 在 Nginx / CLB 后面：只信任内网代理带来的 X-Forwarded-For，取到真实客户端 IP（登录失败锁定按 IP 计数）
   app.set('trust proxy', 'loopback, linklocal, uniquelocal');
@@ -30,4 +34,7 @@ async function bootstrap() {
   await app.listen(app.get<Env>(ENV).PORT);
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -41,10 +41,10 @@ const EnvSchema = z.object({
   WECOM_STAFF_MENTIONS: z.string().default('@客服'),
   /** 与会话内容存档 Sidecar 内部通信的鉴权 Token (可选) */
   WECOM_SIDECAR_TOKEN: z.string().optional(),
-  /** 企业微信接收事件服务器 Token (用于 Webhook 回调 URL 验签，默认提供当前后台临时 Token) */
-  WECOM_CALLBACK_TOKEN: z.string().default('4RP'),
+  /** 企业微信接收事件服务器 Token (用于 Webhook 回调 URL 验签)；密钥不写默认值，放配置中心 agent-app 或本地 .env */
+  WECOM_CALLBACK_TOKEN: z.string().optional(),
   /** 企业微信接收事件服务器 EncodingAESKey (43位 Base64) */
-  WECOM_CALLBACK_AES_KEY: z.string().default('KLW9jBbvR3Jj1fC4Ujxr2KXeeHdeDMoli6nQZq2hEeq'),
+  WECOM_CALLBACK_AES_KEY: z.string().optional(),
   /** 企业微信 CorpID */
   WECOM_CORPID: z.string().optional(),
 

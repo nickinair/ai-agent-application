@@ -129,7 +129,7 @@ describe('企业微信接收事件服务器回调 (WecomCallback)', () => {
       expect(sentBody).toBe(rawEcho);
     });
 
-    it('POST /api/wecom/callback 成功解密群消息并注入流水线', async () => {
+    it('POST /api/wecom/callback 成功解密并回 success；群消息由机器人长连接收，回调不重复进流水线', async () => {
       const xmlContent = `
         <xml>
           <ToUserName><![CDATA[${corpId}]]></ToUserName>
@@ -169,13 +169,7 @@ describe('企业微信接收事件服务器回调 (WecomCallback)', () => {
 
       expect(sentStatus).toBe(200);
       expect(sentBody).toBe('success');
-      expect(mockInboundService.onInbound).toHaveBeenCalledTimes(1);
-
-      const calledArg = mockInboundService.onInbound.mock.calls[0][0];
-      expect(calledArg.channel).toBe('wecom_group');
-      expect(calledArg.channelChatId).toBe('wr_chat_group_1');
-      expect(calledArg.sender.channelUserId).toBe('wm_customer_test');
-      expect(calledArg.text).toBe('请问延保怎么办理？');
+      expect(mockInboundService.onInbound).not.toHaveBeenCalled();
     });
   });
 });
