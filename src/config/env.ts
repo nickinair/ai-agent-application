@@ -86,9 +86,27 @@ const EnvSchema = z.object({
   MIC_RETURN_BY_MENTION_ENABLED: BooleanEnvSchema.optional(),
   /** 人工客服回复等待超时（ms），默认 60000ms（60秒自动接回） */
   HUMAN_WAIT_TIMEOUT_MS: z.coerce.number().int().optional(),
+
+  // =========================================================================
+  // a3 内部网关 (Sidecar Gateway) 服务注册发现配置
+  // =========================================================================
+  /** 网关服务地址，默认 http://localhost:3003 */
+  GATEWAY_URL: z.string().default('http://localhost:3003'),
+  /** 是否启用向网关注册自身服务实例，默认 true (采用非阻塞 Fail-safe 容错) */
+  GATEWAY_ENABLED: BooleanEnvSchema.default(true),
+  /** 向网关注册的服务名称，默认 ai-agent-application */
+  GATEWAY_SERVICE_NAME: z.string().default('ai-agent-application'),
+  /** 网关实例唯一 ID，可选，未配置时自动生成 */
+  GATEWAY_INSTANCE_ID: z.string().optional(),
+  /** 服务绑定的主机地址/IP，默认 127.0.0.1 */
+  GATEWAY_HOST: z.string().default('127.0.0.1'),
+  /** 心跳保活上报间隔 (ms)，默认 10000ms (10秒) */
+  GATEWAY_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().default(10000),
+  /** 网关轻量认证凭证 Token */
+  GATEWAY_AUTH_TOKEN: z.string().optional(),
 });
 
-/** 管理 API 与配置通知用的字段（倪开）在类型上可选：运行时由 loadEnv 填默认值，单测手写的 Env 对象不必带上 */
+/** 管理 API、网关配置与配置通知用的字段在类型上可选：运行时由 loadEnv 填默认值，单测手写的 Env 对象不必带上 */
 type ApiEnvKeys =
   | 'NODE_ENV'
   | 'REDIS_URL'
@@ -97,7 +115,14 @@ type ApiEnvKeys =
   | 'TEST_INJECT_ENABLED'
   | 'TEST_TENANT_ID'
   | 'WECOM_CALLBACK_TOKEN'
-  | 'WECOM_CALLBACK_AES_KEY';
+  | 'WECOM_CALLBACK_AES_KEY'
+  | 'GATEWAY_URL'
+  | 'GATEWAY_ENABLED'
+  | 'GATEWAY_SERVICE_NAME'
+  | 'GATEWAY_INSTANCE_ID'
+  | 'GATEWAY_HOST'
+  | 'GATEWAY_HEARTBEAT_INTERVAL_MS'
+  | 'GATEWAY_AUTH_TOKEN';
 export type Env = Omit<z.infer<typeof EnvSchema>, ApiEnvKeys> & Partial<Pick<z.infer<typeof EnvSchema>, ApiEnvKeys>>;
 
 let envFilesLoaded = false;

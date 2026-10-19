@@ -7,11 +7,14 @@ import {
   NotFoundException,
   Param,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { RegistryService } from './registry.service';
 import type { HeartbeatDto, RegisterInstanceDto, ServiceInstance } from './registry.types';
+import { GatewayAuthGuard } from '../auth/gateway-auth.guard';
 
 @Controller('api/registry')
+@UseGuards(GatewayAuthGuard)
 export class RegistryController {
   constructor(private readonly registryService: RegistryService) {}
 

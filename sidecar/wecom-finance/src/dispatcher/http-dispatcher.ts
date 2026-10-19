@@ -1,8 +1,10 @@
 import { InboundFinanceEvent } from '../types/finance.types';
 
 export interface HttpDispatcherOptions {
-  /** 接收事件的 a3 Webhook URL，如 http://127.0.0.1:3000/api/admin/wecom/finance-inbound */
-  webhookUrl: string;
+  /** 默认或兜底接收事件的 a3 Webhook URL，如 http://127.0.0.1:3002/api/admin/wecom/finance-inbound */
+  webhookUrl?: string;
+  /** 动态 URL 解析器 (支持从 GatewayClient 动态发现) */
+  urlResolver?: () => Promise<string | null>;
   /** 内部安全认证令牌（放在 x-sidecar-token 请求头） */
   secretToken?: string;
   /** 单次请求超时时间 (毫秒，默认 5000) */
@@ -16,13 +18,15 @@ export interface HttpDispatcherOptions {
  * 负责将解密后的会话存档事件安全、可靠地投递给 a3 主应用
  */
 export class HttpDispatcher {
-  private webhookUrl: string;
+  private webhookUrl?: string;
+  private urlResolver?: () => Promise<string | null>;
   private secretToken?: string;
   private timeoutMs: number;
   private maxRetries: number;
 
   constructor(options: HttpDispatcherOptions) {
     this.webhookUrl = options.webhookUrl;
+    this.urlResolver = options.urlResolver;
     this.secretToken = options.secretToken;
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.maxRetries = options.maxRetries ?? 3;
@@ -32,8 +36,20 @@ export class HttpDispatcher {
    * 向 a3 投递单条事件
    */
   public async dispatch(event: InboundFinanceEvent): Promise<boolean> {
-    if (!this.webhookUrl) {
-      console.warn('[HttpDispatcher] 未配置 A3_WEBHOOK_URL，跳过事件投递');
+    let targetUrl = this.webhookUrl;
+    if (this.urlResolver) {
+      try {
+        const dynamicUrl = await this.urlResolver();
+        if (dynamicUrl) {
+          targetUrl = dynamicUrl;
+        }
+      } catch (err: any) {
+        console.warn(`[HttpDispatcher] 动态获取 a3 地址异常，回退使用本地配置: ${err.message}`);
+      }
+    }
+
+    if (!targetUrl) {
+      console.warn('[HttpDispatcher] 未能解析或配置 A3_WEBHOOK_URL，跳过事件投递');
       return true;
     }
 
@@ -55,7 +71,7 @@ export class HttpDispatcher {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
-        const response = await fetch(this.webhookUrl, {
+        const response = await fetch(targetUrl, {
           method: 'POST',
           headers,
           body: payload,

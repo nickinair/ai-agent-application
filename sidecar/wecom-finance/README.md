@@ -2,6 +2,8 @@
 
 该模块作为技术开发方案（§11.1 C1 指标）中外部客户群全量消息感知的核心组件，以独立 Sidecar 进程形式 7x24 小时运行，专门解决**“客户在外部群发送任意消息（未 @ 机器人）时系统无法感知”**的官方限制。
 
+> 📖 **完整与详细的 API 协议规范、入参示例及数据结构请参阅独立文档：[doc/API.md](file:///home/hyong/code/ai-agent/ai-agent-application/sidecar/wecom-finance/doc/API.md)**。
+
 ---
 
 ## 架构协同图 (R1 + R2)

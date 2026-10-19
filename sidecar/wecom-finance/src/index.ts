@@ -7,6 +7,8 @@ import { SeqManager } from './cursor/seq-manager';
 import { IFinanceDriver } from './driver/driver.interface';
 import { MockDriver } from './driver/mock-driver';
 import { NativeDriver } from './driver/native-driver';
+import { HttpDispatcher } from './dispatcher/http-dispatcher';
+import { GatewayClient } from './gateway/gateway-client';
 import { FinanceWorker } from './worker/finance-worker';
 
 /**
@@ -86,6 +88,13 @@ function loadConfig(): FinanceSidecarConfig {
     cSdkLibPath: process.env.WECOM_C_SDK_LIB_PATH,
     a3WebhookUrl: process.env.A3_WEBHOOK_URL,
     a3WebhookSecret: process.env.A3_WEBHOOK_SECRET,
+    gatewayUrl: process.env.GATEWAY_URL || 'http://localhost:3003',
+    gatewayEnabled: process.env.GATEWAY_ENABLED !== 'false',
+    gatewayServiceName: process.env.GATEWAY_SERVICE_NAME || 'wecom-finance',
+    gatewayA3ServiceName: process.env.GATEWAY_A3_SERVICE_NAME || 'ai-agent-application',
+    gatewayNamespace: process.env.GATEWAY_NAMESPACE || 'wecom-finance',
+    gatewayHeartbeatIntervalMs: parseInt(process.env.GATEWAY_HEARTBEAT_INTERVAL_MS || '10000', 10),
+    gatewayAuthToken: process.env.GATEWAY_AUTH_TOKEN,
   };
 }
 
@@ -95,6 +104,45 @@ async function bootstrap() {
   console.log('========================================================');
 
   const config = loadConfig();
+
+  // 1. 初始化网关客户端 (SRF & CC)
+  const gatewayClient = new GatewayClient({
+    gatewayUrl: config.gatewayUrl,
+    enabled: config.gatewayEnabled,
+    serviceName: config.gatewayServiceName,
+    a3ServiceName: config.gatewayA3ServiceName,
+    namespace: config.gatewayNamespace,
+    heartbeatIntervalMs: config.gatewayHeartbeatIntervalMs,
+    authToken: config.gatewayAuthToken,
+  });
+
+  // 2. 从网关配置中心 (CC) 动态拉取配置并合并
+  if (gatewayClient.isEnabled()) {
+    try {
+      const remote = await gatewayClient.fetchRemoteConfig();
+      if (remote.pollIntervalMs !== undefined) config.pollIntervalMs = Number(remote.pollIntervalMs);
+      if (remote.batchSize !== undefined) config.batchSize = Number(remote.batchSize);
+      if (remote.corpid) config.corpid = String(remote.corpid);
+      if (remote.secret) config.secret = String(remote.secret);
+      if (remote.driverMode === 'mock' || remote.driverMode === 'native') config.driverMode = remote.driverMode;
+      if (remote.a3WebhookUrl) config.a3WebhookUrl = String(remote.a3WebhookUrl);
+      if (remote.a3WebhookSecret) config.a3WebhookSecret = String(remote.a3WebhookSecret);
+    } catch (err: any) {
+      console.warn(`[Bootstrap] 加载网关配置中心异常，继续使用本地配置: ${err.message}`);
+    }
+
+    // 3. 向网关注册中心 (SRF) 注册自身并开启心跳
+    await gatewayClient.register();
+    gatewayClient.startHeartbeat();
+  }
+
+  // 4. 构建支持动态发现 a3 地址的 HttpDispatcher
+  const dispatcher = new HttpDispatcher({
+    webhookUrl: config.a3WebhookUrl,
+    urlResolver: async () => gatewayClient.discoverA3WebhookUrl(),
+    secretToken: config.a3WebhookSecret,
+  });
+
   let driver: IFinanceDriver;
   let rsaPrivateKeyPem = config.rsaPrivateKey;
 
@@ -135,11 +183,13 @@ async function bootstrap() {
   const financeCrypto = new FinanceCrypto(rsaPrivateKeyPem, config.rsaPrivateKeyPassphrase);
   const seqManager = new SeqManager(config.cursorStoragePath);
 
-  const worker = new FinanceWorker(driver, financeCrypto, seqManager, config);
+  const worker = new FinanceWorker(driver, financeCrypto, seqManager, config, undefined, dispatcher);
 
   // 优雅停机信号处理
   const shutdown = async (signal: string) => {
     console.log(`\n[Bootstrap] 收到 ${signal} 停机信号，开始执行优雅关机流程...`);
+    gatewayClient.stopHeartbeat();
+    await gatewayClient.deregister();
     await worker.stop();
     await driver.destroy();
     console.log('[Bootstrap] 资源释放完毕，进程正常退出。');

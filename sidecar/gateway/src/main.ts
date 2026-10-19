@@ -14,6 +14,7 @@ async function bootstrap(): Promise<void> {
   await app.listen(port);
 
   logger.log(`🚀 a3 专属内部微服务网关已成功启动，正在监听端口: ${port}`);
+  logger.log(`👉 网关接口手册与用法中心: http://localhost:${port}/api`);
   logger.log(`👉 服务注册与发现中心: http://localhost:${port}/api/registry/services`);
   logger.log(`👉 动态配置中心: http://localhost:${port}/api/config/namespaces`);
   logger.log(`👉 健康检查: http://localhost:${port}/health`);

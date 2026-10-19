@@ -7,6 +7,8 @@ import { RegistryController } from './registry/registry.controller';
 import { ConfigService } from './config-center/config.service';
 import { ConfigController } from './config-center/config.controller';
 import { HealthController } from './health/health.controller';
+import { GatewayAuthGuard } from './auth/gateway-auth.guard';
+import { ManualModule } from './manual/manual.module';
 
 @Module({})
 export class AppModule {
@@ -15,6 +17,9 @@ export class AppModule {
 
     return {
       module: AppModule,
+      imports: [
+        ManualModule,
+      ],
       controllers: [
         HealthController,
         RegistryController,
@@ -26,6 +31,7 @@ export class AppModule {
         MemberIdentityService,
         RegistryService,
         ConfigService,
+        GatewayAuthGuard,
       ],
       exports: [
         ENV,
@@ -33,6 +39,8 @@ export class AppModule {
         MemberIdentityService,
         RegistryService,
         ConfigService,
+        GatewayAuthGuard,
+        ManualModule,
       ],
     };
   }

@@ -8,11 +8,15 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from './config.service';
 import type { BatchSetConfigDto, ConfigItem, SetConfigDto } from './config.types';
+import { GatewayAuthGuard } from '../auth/gateway-auth.guard';
 
 @Controller('api/config')
+@UseGuards(GatewayAuthGuard)
 export class ConfigController {
   constructor(private readonly configService: ConfigService) {}
 
@@ -27,12 +31,15 @@ export class ConfigController {
 
   /**
    * 获取某命名空间下的全量配置字典
+   * 支持 ?detail=true 返回包含 version、updatedAt、comment 的完整元数据字典
    */
   @Get(':namespace')
   async getAll(
     @Param('namespace') namespace: string,
+    @Query('detail') detail?: string,
   ): Promise<{ success: boolean; data: Record<string, unknown> }> {
-    const data = await this.configService.getAll(namespace);
+    const isDetail = detail === 'true' || detail === '1';
+    const data = await this.configService.getAll(namespace, isDetail);
     return { success: true, data };
   }
 
@@ -97,5 +104,17 @@ export class ConfigController {
   ): Promise<{ success: boolean }> {
     const success = await this.configService.delete(namespace, key);
     return { success };
+  }
+
+  /**
+   * 清空并删除整个命名空间
+   */
+  @Delete(':namespace')
+  @HttpCode(HttpStatus.OK)
+  async deleteNamespace(
+    @Param('namespace') namespace: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const success = await this.configService.deleteNamespace(namespace);
+    return { success, message: `命名空间 ${namespace} 已清空删除` };
   }
 }

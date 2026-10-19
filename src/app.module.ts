@@ -15,9 +15,18 @@ import { QueueModule } from './infra/queue/queue.module';
 import { PipelineModule } from './modules/pipeline/pipeline.module';
 import { ConfigNotifier } from './infra/config-notifier';
 import { ReplyModule } from './modules/reply/reply.module';
+import { GatewayModule } from './infra/gateway/gateway.module';
 
 @Module({
-  imports: [DatabaseModule, RedisModule, QueueModule, PipelineModule, WecomModule, ReplyModule],
+  imports: [
+    DatabaseModule,
+    RedisModule,
+    QueueModule,
+    PipelineModule,
+    WecomModule,
+    ReplyModule,
+    GatewayModule,
+  ],
   controllers: [
     HealthController,
     AuthController,

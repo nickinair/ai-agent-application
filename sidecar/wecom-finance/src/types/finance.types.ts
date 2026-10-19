@@ -191,4 +191,11 @@ export interface FinanceSidecarConfig {
   cSdkLibPath?: string;
   a3WebhookUrl?: string;
   a3WebhookSecret?: string;
+  gatewayUrl?: string;
+  gatewayEnabled?: boolean;
+  gatewayServiceName?: string;
+  gatewayA3ServiceName?: string;
+  gatewayNamespace?: string;
+  gatewayHeartbeatIntervalMs?: number;
+  gatewayAuthToken?: string;
 }

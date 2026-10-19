@@ -74,4 +74,27 @@ describe('ConfigService', () => {
     expect(namespaces).toContain('ns_alpha');
     expect(namespaces).toContain('ns_beta');
   });
+
+  it('getAll 传入 detail=true 时应返回包含 version, updatedAt, comment 等完整元数据', async () => {
+    await service.set('wecom-finance', 'pollIntervalMs', 1000, '轮询间隔');
+    const details = (await service.getAll('wecom-finance', true)) as Record<string, any>;
+    expect(details.pollIntervalMs).toBeDefined();
+    expect(details.pollIntervalMs.value).toBe(1000);
+    expect(details.pollIntervalMs.version).toBe(1);
+    expect(details.pollIntervalMs.comment).toBe('轮询间隔');
+    expect(typeof details.pollIntervalMs.updatedAt).toBe('number');
+  });
+
+  it('deleteNamespace 应清空整个命名空间配置及命名空间列表', async () => {
+    await service.set('temp_ns', 'k1', 'v1');
+    await service.set('temp_ns', 'k2', 'v2');
+    expect(await service.listNamespaces()).toContain('temp_ns');
+
+    const deleted = await service.deleteNamespace('temp_ns');
+    expect(deleted).toBe(true);
+
+    const afterAll = await service.getAll('temp_ns');
+    expect(Object.keys(afterAll)).toHaveLength(0);
+    expect(await service.listNamespaces()).not.toContain('temp_ns');
+  });
 });

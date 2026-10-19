@@ -52,8 +52,10 @@ export class ConfigService {
 
   /**
    * 获取指定命名空间下的全部配置项字典
+   * @param namespace 命名空间
+   * @param detail 若为 true，返回包含 version, updatedAt, comment 等元数据的完整 ConfigItem；否则返回扁平 key-value 字典
    */
-  async getAll(namespace: string): Promise<Record<string, unknown>> {
+  async getAll(namespace: string, detail: boolean = false): Promise<Record<string, unknown>> {
     const result: Record<string, unknown> = {};
 
     if (this.redisService) {
@@ -62,7 +64,7 @@ export class ConfigService {
       for (const [k, v] of Object.entries(all)) {
         try {
           const item = JSON.parse(v) as ConfigItem;
-          result[k] = item.value;
+          result[k] = detail ? item : item.value;
           this.setMemoryCache(namespace, k, item);
         } catch {
           result[k] = v;
@@ -74,7 +76,7 @@ export class ConfigService {
     const nsMap = this.memoryConfigs.get(namespace);
     if (nsMap) {
       for (const [k, item] of nsMap.entries()) {
-        result[k] = item.value;
+        result[k] = detail ? item : item.value;
       }
     }
 
@@ -169,6 +171,38 @@ export class ConfigService {
     }
 
     this.logger.log(`[配置中心] 配置已删除 [${namespace}.${key}]`);
+    return deleted;
+  }
+
+  /**
+   * 清空并删除整个命名空间
+   */
+  async deleteNamespace(namespace: string): Promise<boolean> {
+    let deleted = false;
+
+    if (this.memoryConfigs.has(namespace)) {
+      this.memoryConfigs.delete(namespace);
+      deleted = true;
+    }
+
+    if (this.redisService) {
+      const hashKey = this.buildNamespaceHashKey(namespace);
+      const allNsKey = this.buildAllNamespacesKey();
+      await this.redisService.del(hashKey);
+      await this.redisService.getClient().srem(allNsKey, namespace);
+      deleted = true;
+
+      // 广播命名空间清理事件
+      const changeEvent: ConfigChangeEvent = {
+        namespace,
+        key: '*',
+        version: -1,
+        timestamp: Date.now(),
+      };
+      await this.redisService.publish(this.CHANGE_CHANNEL, JSON.stringify(changeEvent));
+    }
+
+    this.logger.log(`[配置中心] 命名空间已清空删除 [${namespace}]`);
     return deleted;
   }
 

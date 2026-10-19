@@ -10,7 +10,17 @@
     "admin": "node dist/cli/admin.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest",
-    "test:phase1": "jest test/state-transition.spec.ts test/watchdog.spec.ts test/idle-timeout.spec.ts test/phase1-integration.spec.ts"
+    "test:phase1": "jest test/state-transition.spec.ts test/watchdog.spec.ts test/idle-timeout.spec.ts test/phase1-integration.spec.ts",
+    "deploy": "./deploy.sh",
+    "deploy:local": "./scripts/deploy.sh deploy local",
+    "deploy:test": "./scripts/deploy.sh deploy test",
+    "deploy:prod": "./scripts/deploy.sh deploy prod",
+    "deploy:status": "./scripts/deploy.sh status local",
+    "deploy:stop": "./scripts/deploy.sh stop local",
+    "deploy:remote": "./scripts/deploy.sh remote",
+    "deploy:remote:status": "./scripts/deploy.sh remote-status",
+    "deploy:remote:logs": "./scripts/deploy.sh remote-logs",
+    "deploy:remote:stop": "./scripts/deploy.sh remote-stop"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",
