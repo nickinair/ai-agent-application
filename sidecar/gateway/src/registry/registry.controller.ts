@@ -63,6 +63,15 @@ export class RegistryController {
   }
 
   /**
+   * 获取所有存活服务的全部健康实例
+   */
+  @Get('instances')
+  async getAllInstances(): Promise<{ success: boolean; data: ServiceInstance[] }> {
+    const data = await this.registryService.getAllInstances();
+    return { success: true, data };
+  }
+
+  /**
    * 获取某服务下的所有可用实例
    */
   @Get('instances/:serviceName')

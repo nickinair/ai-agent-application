@@ -185,9 +185,18 @@ async function bootstrap() {
 
   const worker = new FinanceWorker(driver, financeCrypto, seqManager, config, undefined, dispatcher);
 
+  // 绑定网关 CC 动态配置热更回调
+  if (gatewayClient.isEnabled()) {
+    gatewayClient.onConfigUpdate((remote) => {
+      worker.updateConfig(remote);
+    });
+    gatewayClient.startConfigSubscriber(process.env.REDIS_URL);
+  }
+
   // 优雅停机信号处理
   const shutdown = async (signal: string) => {
     console.log(`\n[Bootstrap] 收到 ${signal} 停机信号，开始执行优雅关机流程...`);
+    gatewayClient.stopConfigSubscriber();
     gatewayClient.stopHeartbeat();
     await gatewayClient.deregister();
     await worker.stop();
@@ -195,6 +204,7 @@ async function bootstrap() {
     console.log('[Bootstrap] 资源释放完毕，进程正常退出。');
     process.exit(0);
   };
+
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));

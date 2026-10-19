@@ -7,8 +7,10 @@ import { WecomCallbackController } from './wecom-callback.controller';
 import { ENV, loadEnv } from '../../config/env';
 import { PipelineModule } from '../pipeline/pipeline.module';
 
+import { GatewayModule } from '../../infra/gateway/gateway.module';
+
 @Module({
-  imports: [PipelineModule],
+  imports: [PipelineModule, GatewayModule],
   controllers: [WecomController, WecomCallbackController],
   providers: [
     {

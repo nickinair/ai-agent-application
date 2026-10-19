@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import Redis from 'ioredis';
 
 export interface GatewayClientOptions {
   gatewayUrl?: string;
@@ -9,6 +10,7 @@ export interface GatewayClientOptions {
   instanceId?: string;
   heartbeatIntervalMs?: number;
   authToken?: string;
+  redisUrl?: string;
 }
 
 export interface DiscoveredInstance {
@@ -22,7 +24,7 @@ export interface DiscoveredInstance {
 /**
  * wecom-finance 网关统一客户端
  * 同时对接网关的两大核心能力：
- * 1. 动态配置中心 (CC): 启动时拉取远程配置与本地融合
+ * 1. 动态配置中心 (CC): 启动时拉取远程配置与本地融合，并支持 Redis Pub/Sub 秒级热生效
  * 2. 服务注册发现中心 (SRF): 注册自身、周期心跳、动态发现下游 a3 实例地址
  */
 export class GatewayClient {
@@ -34,8 +36,11 @@ export class GatewayClient {
   private instanceId: string;
   private heartbeatIntervalMs: number;
   private authToken?: string;
+  private redisUrl?: string;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private isRegistered: boolean = false;
+  private redisSubscriber: Redis | null = null;
+  private configListeners: Array<(configs: Record<string, unknown>) => void> = [];
 
   constructor(options: GatewayClientOptions = {}) {
     this.gatewayUrl = (options.gatewayUrl || 'http://127.0.0.1:3003').replace(/\/+$/, '');
@@ -46,6 +51,7 @@ export class GatewayClient {
     this.instanceId = options.instanceId || `wf-${randomUUID().slice(0, 8)}`;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs || 10000;
     this.authToken = options.authToken;
+    this.redisUrl = options.redisUrl;
   }
 
   public isEnabled(): boolean {
@@ -55,6 +61,81 @@ export class GatewayClient {
   public getInstanceId(): string {
     return this.instanceId;
   }
+
+  /**
+   * 注册配置动态更新回调
+   */
+  public onConfigUpdate(listener: (configs: Record<string, unknown>) => void): void {
+    this.configListeners.push(listener);
+  }
+
+  /**
+   * 启动 Redis 频道订阅监听 (ag:cfg:changed)
+   */
+  public startConfigSubscriber(customRedisUrl?: string): void {
+    if (!this.enabled || this.redisSubscriber) return;
+
+    const targetUrl = customRedisUrl || this.redisUrl || process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+    try {
+      this.redisSubscriber = new Redis(targetUrl, {
+        lazyConnect: false,
+        maxRetriesPerRequest: null,
+      });
+
+      this.redisSubscriber.on('connect', () => {
+        console.log(`[GatewayClient][CC] Redis 订阅连接就绪: ${targetUrl}`);
+      });
+
+      this.redisSubscriber.on('error', (err) => {
+        console.warn(`[GatewayClient][CC] Redis 订阅异常: ${err.message}`);
+      });
+
+      const channel = 'ag:cfg:changed';
+      this.redisSubscriber.subscribe(channel, (err) => {
+        if (!err) {
+          console.log(`[GatewayClient][CC] 成功订阅网关配置变更频道: ${channel}`);
+        }
+      });
+
+      this.redisSubscriber.on('message', async (chan, msg) => {
+        if (chan === channel) {
+          try {
+            const event = JSON.parse(msg);
+            if (event.namespace === this.namespace || event.namespace === '*') {
+              console.log(
+                `[GatewayClient][CC] 监听到命名空间 [${this.namespace}] 配置变更通知 (v${event.version})，触发热重载...`,
+              );
+              const updated = await this.fetchRemoteConfig();
+              for (const listener of this.configListeners) {
+                try {
+                  listener(updated);
+                } catch (lErr: any) {
+                  console.error(`[GatewayClient][CC] 执行配置回调失败: ${lErr.message}`);
+                }
+              }
+            }
+          } catch {
+            // 忽略非 JSON 广播
+          }
+        }
+      });
+    } catch (err: any) {
+      console.warn(`[GatewayClient][CC] 启动 Redis 订阅器失败: ${err.message}`);
+    }
+  }
+
+  /**
+   * 停止 Redis 广播监听
+   */
+  public stopConfigSubscriber(): void {
+    if (this.redisSubscriber) {
+      try {
+        this.redisSubscriber.disconnect();
+      } catch {}
+      this.redisSubscriber = null;
+    }
+  }
+
 
   /**
    * ==========================================

@@ -12,6 +12,7 @@ import {
   HttpStatus,
   Inject,
   Logger,
+  Optional,
   Post,
   Query,
   Req,
@@ -23,6 +24,7 @@ import { ENV, type Env } from '../../config/env';
 import { InboundPipelineService } from '../pipeline/inbound-pipeline.service';
 import { WecomCrypto } from './crypto/wecom-crypto';
 import type { InboundMessage } from '../../contracts';
+import { GatewayConfigService } from '../../infra/gateway/gateway-config.service';
 
 @Controller('api/wecom')
 export class WecomCallbackController {
@@ -31,6 +33,7 @@ export class WecomCallbackController {
   constructor(
     @Inject(ENV) private readonly env: Env,
     private readonly inboundService: InboundPipelineService,
+    @Optional() private readonly gatewayConfig?: GatewayConfigService,
   ) {}
 
   /**
@@ -55,8 +58,12 @@ export class WecomCallbackController {
       throw new BadRequestException('缺少企业微信 URL 验签必需参数');
     }
 
-    const token = this.env.WECOM_CALLBACK_TOKEN;
-    const aesKey = this.env.WECOM_CALLBACK_AES_KEY;
+    const token =
+      (this.gatewayConfig?.get('wecom', 'callbackToken') as string) || this.env.WECOM_CALLBACK_TOKEN;
+    const aesKey =
+      (this.gatewayConfig?.get('wecom', 'callbackAesKey') as string) || this.env.WECOM_CALLBACK_AES_KEY;
+    const corpid =
+      (this.gatewayConfig?.get('wecom', 'corpid') as string) || this.env.WECOM_CORPID;
 
     if (!token || !aesKey) {
       this.logger.error('未配置 WECOM_CALLBACK_TOKEN 或 WECOM_CALLBACK_AES_KEY，无法完成验签');
@@ -65,7 +72,8 @@ export class WecomCallbackController {
     }
 
     try {
-      const cryptoHelper = new WecomCrypto(token, aesKey, this.env.WECOM_CORPID);
+      const cryptoHelper = new WecomCrypto(token, aesKey, corpid);
+
       const plainEcho = cryptoHelper.verifyAndDecryptEchoStr(
         msgSignature,
         timestamp,
@@ -95,8 +103,12 @@ export class WecomCallbackController {
     @Req() req: any,
     @Res() res: any,
   ): Promise<void> {
-    const token = this.env.WECOM_CALLBACK_TOKEN;
-    const aesKey = this.env.WECOM_CALLBACK_AES_KEY;
+    const token =
+      (this.gatewayConfig?.get('wecom', 'callbackToken') as string) || this.env.WECOM_CALLBACK_TOKEN;
+    const aesKey =
+      (this.gatewayConfig?.get('wecom', 'callbackAesKey') as string) || this.env.WECOM_CALLBACK_AES_KEY;
+    const corpid =
+      (this.gatewayConfig?.get('wecom', 'corpid') as string) || this.env.WECOM_CORPID;
 
     if (!token || !aesKey) {
       this.logger.error('未配置 WECOM_CALLBACK_TOKEN 或 WECOM_CALLBACK_AES_KEY，无法解密回调消息');
@@ -116,7 +128,8 @@ export class WecomCallbackController {
     }
 
     try {
-      const cryptoHelper = new WecomCrypto(token, aesKey, this.env.WECOM_CORPID);
+      const cryptoHelper = new WecomCrypto(token, aesKey, corpid);
+
       const decryptedXml = cryptoHelper.verifyAndDecryptXml(
         msgSignature,
         timestamp,

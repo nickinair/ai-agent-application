@@ -45,6 +45,27 @@ export class FinanceWorker {
   }
 
   /**
+   * 动态更新运行态参数 (由网关 CC 热通知触发)
+   */
+  public updateConfig(newConfig: Partial<FinanceSidecarConfig>): void {
+    if (newConfig.pollIntervalMs !== undefined && !isNaN(Number(newConfig.pollIntervalMs))) {
+      this.config.pollIntervalMs = Number(newConfig.pollIntervalMs);
+    }
+    if (newConfig.batchSize !== undefined && !isNaN(Number(newConfig.batchSize))) {
+      this.config.batchSize = Number(newConfig.batchSize);
+    }
+    if (newConfig.corpid) {
+      this.config.corpid = String(newConfig.corpid);
+    }
+    if (newConfig.secret) {
+      this.config.secret = String(newConfig.secret);
+    }
+    console.log(
+      `[FinanceWorker] 收到网关配置热更: 轮询间隔=${this.config.pollIntervalMs}ms, 批次大小=${this.config.batchSize}`,
+    );
+  }
+
+  /**
    * 启动长轮询拉取守护工作进程
    */
   public async start(): Promise<void> {

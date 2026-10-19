@@ -109,4 +109,25 @@ describe('RegistryService', () => {
     const instances = await service.getInstances('expiring-service');
     expect(instances).toHaveLength(0);
   });
+
+  it('应该能聚合查询所有服务的全部健康实例 (getAllInstances)', async () => {
+    await service.register({
+      instanceId: 'app-node-1',
+      serviceName: 'ai-agent-application',
+      host: '127.0.0.1',
+      port: 3002,
+    });
+    await service.register({
+      instanceId: 'finance-node-1',
+      serviceName: 'wecom-finance',
+      host: '127.0.0.1',
+      port: 3005,
+    });
+
+    const all = await service.getAllInstances();
+    expect(all).toHaveLength(2);
+    const ids = all.map((i) => i.instanceId);
+    expect(ids).toContain('app-node-1');
+    expect(ids).toContain('finance-node-1');
+  });
 });

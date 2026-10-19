@@ -234,6 +234,21 @@ export class RegistryService {
   }
 
   /**
+   * 获取所有存活服务的全部健康实例列表
+   */
+  async getAllInstances(): Promise<ServiceInstance[]> {
+    const services = await this.getServices();
+    const allInstances: ServiceInstance[] = [];
+
+    for (const service of services) {
+      const instances = await this.getInstances(service);
+      allInstances.push(...instances);
+    }
+
+    return allInstances;
+  }
+
+  /**
    * 获取指定实例详情
    */
   async getInstance(instanceId: string): Promise<ServiceInstance | null> {

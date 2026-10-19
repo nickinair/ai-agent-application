@@ -1,9 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { WSClient } from '@wecom/aibot-node-sdk';
 import type { BaseMessage, EventMessage, TextMessage, WsFrame } from '@wecom/aibot-node-sdk';
 import { ENV, type Env } from '../../config/env';
 import { WecomGroupMessageService } from './wecom-group-message.service';
 import type { WecomBotStatus } from './types/wecom.types';
+import { GatewayConfigService } from '../../infra/gateway/gateway-config.service';
 
 @Injectable()
 export class WecomBotService implements OnModuleInit, OnModuleDestroy {
@@ -14,33 +15,103 @@ export class WecomBotService implements OnModuleInit, OnModuleDestroy {
   private authenticated = false;
   private lastAuthenticatedAt: string | null = null;
 
+  // 记录当前活跃客户端的凭证指纹，用于热更防重复重连
+  private activeBotId: string | null = null;
+  private activeBotSecret: string | null = null;
+  private activeWsUrl: string | null = null;
+  private activeEnabled: boolean = false;
+
   constructor(
     @Inject(ENV) private readonly env: Env,
     private readonly groupMessageService: WecomGroupMessageService,
+    @Optional() private readonly gatewayConfig?: GatewayConfigService,
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const { WECOM_BOT_ID, WECOM_BOT_SECRET, WECOM_BOT_WS_URL, WECOM_BOT_ENABLED } = this.env;
+    await this.startOrReloadClient();
 
-    if (!WECOM_BOT_ENABLED) {
-      this.logger.log('企业微信智能机器人功能已通过环境变量配置显式禁用 (WECOM_BOT_ENABLED=false)');
+    // 监听网关 CC wecom 命名空间配置热变更
+    if (this.gatewayConfig) {
+      this.gatewayConfig.onConfigChange('wecom', async (key, val) => {
+        this.logger.log(`[WecomBotService] 收到企微配置变更通知 (${key})，检查并执行热重载...`);
+        await this.startOrReloadClient();
+      });
+    }
+  }
+
+  /**
+   * 解析当前配置（优先网关 CC，缺省 fallback 至本地 env）
+   */
+  private resolveConfig(): {
+    botId?: string;
+    botSecret?: string;
+    wsUrl?: string;
+    botEnabled: boolean;
+  } {
+    const botId =
+      (this.gatewayConfig?.get('wecom', 'botId') as string) || this.env.WECOM_BOT_ID;
+    const botSecret =
+      (this.gatewayConfig?.get('wecom', 'botSecret') as string) || this.env.WECOM_BOT_SECRET;
+    const wsUrl =
+      (this.gatewayConfig?.get('wecom', 'botWsUrl') as string) || this.env.WECOM_BOT_WS_URL;
+    const rawEnabled = this.gatewayConfig?.get('wecom', 'botEnabled');
+    const botEnabled =
+      rawEnabled !== undefined ? Boolean(rawEnabled) : this.env.WECOM_BOT_ENABLED;
+
+    return { botId, botSecret, wsUrl, botEnabled };
+  }
+
+  /**
+   * 启动或热重载长连接客户端
+   */
+  async startOrReloadClient(): Promise<void> {
+    const { botId, botSecret, wsUrl, botEnabled } = this.resolveConfig();
+
+    // 1. 如果已禁用或缺少凭证
+    if (!botEnabled || !botId || !botSecret) {
+      if (this.client) {
+        this.logger.log('企微机器人配置已禁用或凭证已清空，正在断开并下线长连接...');
+        await this.disconnectClient();
+      } else {
+        if (!botEnabled) {
+          this.logger.log('企业微信智能机器人功能已显式禁用 (botEnabled=false)');
+        } else {
+          this.logger.warn(
+            '未检测到 botId 或 botSecret，企业微信长连接服务保持待机状态（可通过网关 CC 动态录入开启）',
+          );
+        }
+      }
+      this.activeBotId = null;
+      this.activeBotSecret = null;
+      this.activeWsUrl = null;
+      this.activeEnabled = false;
       return;
     }
 
-    if (!WECOM_BOT_ID || !WECOM_BOT_SECRET) {
-      this.logger.warn(
-        '未检测到 WECOM_BOT_ID 或 WECOM_BOT_SECRET 环境变量，企业微信长连接服务跳过启动。（如需启动请通过本地脚本 scripts/start-dev-wecom.sh 注入）',
-      );
+    // 2. 检查配置是否发生实质变化，避免无意义的频繁重连
+    if (
+      this.client &&
+      this.activeEnabled === botEnabled &&
+      this.activeBotId === botId &&
+      this.activeBotSecret === botSecret &&
+      this.activeWsUrl === (wsUrl || null)
+    ) {
       return;
     }
 
-    this.logger.log(`正在初始化企业微信智能机器人长连接客户端 (Bot ID: ${this.maskBotId(WECOM_BOT_ID)})...`);
+    // 3. 凭证或参数变更，先优雅断开旧连接
+    if (this.client) {
+      this.logger.log('检测到企业微信长连接参数变更，正在平滑重启长连接...');
+      await this.disconnectClient();
+    }
+
+    this.logger.log(`正在初始化企业微信智能机器人长连接客户端 (Bot ID: ${this.maskBotId(botId)})...`);
 
     try {
       this.client = new WSClient({
-        botId: WECOM_BOT_ID,
-        secret: WECOM_BOT_SECRET,
-        wsUrl: WECOM_BOT_WS_URL || undefined,
+        botId,
+        secret: botSecret,
+        wsUrl: wsUrl || undefined,
         logger: {
           debug: (msg: string, ...args: any[]) => this.logger.debug(`${msg} ${args.length ? JSON.stringify(args) : ''}`),
           info: (msg: string, ...args: any[]) => this.logger.log(`${msg} ${args.length ? JSON.stringify(args) : ''}`),
@@ -49,13 +120,32 @@ export class WecomBotService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
+      this.activeBotId = botId;
+      this.activeBotSecret = botSecret;
+      this.activeWsUrl = wsUrl || null;
+      this.activeEnabled = botEnabled;
+
       this.setupEventListeners();
       this.client.connect();
-      this.logger.log('企业微信 WebSocket 长连接发起建立...');
+      this.logger.log('企业微信 WebSocket 长连接发起建立 (动态热重载成功)...');
     } catch (error) {
       this.logger.error(`初始化企业微信智能机器人失败: ${(error as Error).message}`, (error as Error).stack);
     }
   }
+
+  private async disconnectClient(): Promise<void> {
+    if (this.client) {
+      try {
+        this.client.disconnect();
+      } catch (err) {
+        this.logger.warn(`关闭长连接时发生异常: ${(err as Error).message}`);
+      }
+      this.client = null;
+      this.connected = false;
+      this.authenticated = false;
+    }
+  }
+
 
   async onModuleDestroy(): Promise<void> {
     if (this.client) {
@@ -127,15 +217,16 @@ export class WecomBotService implements OnModuleInit, OnModuleDestroy {
    * 获取机器人运行状态
    */
   getStatus(): WecomBotStatus {
-    const isConfigured = Boolean(this.env.WECOM_BOT_ID && this.env.WECOM_BOT_SECRET);
+    const { botId, botSecret, botEnabled } = this.resolveConfig();
+    const isConfigured = Boolean(botId && botSecret);
     const msgStats = this.groupMessageService.getStats();
 
     return {
       configured: isConfigured,
-      enabled: this.env.WECOM_BOT_ENABLED,
+      enabled: botEnabled,
       connected: this.connected,
       authenticated: this.authenticated,
-      botId: this.env.WECOM_BOT_ID ? this.maskBotId(this.env.WECOM_BOT_ID) : null,
+      botId: botId ? this.maskBotId(botId) : null,
       stats: {
         totalMessagesReceived: msgStats.receivedCount,
         totalRepliesSent: msgStats.repliedCount,
@@ -145,6 +236,7 @@ export class WecomBotService implements OnModuleInit, OnModuleDestroy {
       },
     };
   }
+
 
   /**
    * 脱敏展示 Bot ID
