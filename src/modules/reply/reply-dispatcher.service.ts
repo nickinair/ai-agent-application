@@ -53,7 +53,8 @@ export class ReplyDispatcherService implements OnModuleInit {
    * 测试环境打开测试注入时也消费（测试会话只记录不外发）。
    */
   onModuleInit(): void {
-    const hasBot = this.env.WECOM_BOT_ENABLED && !!this.env.WECOM_BOT_ID;
+    // 机器人凭证可能只在配置中心的 wecom 命名空间里（环境变量没有 WECOM_BOT_ID），所以只按本机开关判断
+    const hasBot = this.env.WECOM_BOT_ENABLED !== false;
     if (!hasBot && !this.env.TEST_INJECT_ENABLED) {
       this.logger.warn('本实例没有企微机器人长连接，也没开测试注入，不消费 agent.queue.post');
       return;

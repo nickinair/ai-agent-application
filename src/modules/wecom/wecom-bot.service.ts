@@ -54,9 +54,15 @@ export class WecomBotService implements OnModuleInit, OnModuleDestroy {
       (this.gatewayConfig?.get('wecom', 'botSecret') as string) || this.env.WECOM_BOT_SECRET;
     const wsUrl =
       (this.gatewayConfig?.get('wecom', 'botWsUrl') as string) || this.env.WECOM_BOT_WS_URL;
+    // 本机 WECOM_BOT_ENABLED=false 时一律不连：一个机器人只能有一条长连接，由哪台机器持有按机器定，
+    // 配置中心是所有实例共用的，不能把每台都打开；配置中心的 botEnabled 只用来整体关掉
+    // （值可能是字符串，"false" / "0" / "off" 都算关）
     const rawEnabled = this.gatewayConfig?.get('wecom', 'botEnabled');
-    const botEnabled =
-      rawEnabled !== undefined ? Boolean(rawEnabled) : this.env.WECOM_BOT_ENABLED;
+    const centerEnabled =
+      rawEnabled === undefined || rawEnabled === null
+        ? true
+        : !['false', '0', 'off', 'no', ''].includes(String(rawEnabled).trim().toLowerCase());
+    const botEnabled = this.env.WECOM_BOT_ENABLED !== false && centerEnabled;
 
     return { botId, botSecret, wsUrl, botEnabled };
   }

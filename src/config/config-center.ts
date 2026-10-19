@@ -10,6 +10,26 @@
 
 export const CONFIG_NAMESPACES = ['agent-shared', 'agent-app'] as const;
 
+/**
+ * 黄勇的 runtime 命名空间（scripts/gateway-manage.sh 的"流控助手"写入，小驼峰键）映射到运行时读的环境变量。
+ * 在 agent-app 之后应用（同一参数以 runtime 为准）；改了以后重启 A3 生效。
+ */
+export const RUNTIME_NAMESPACE = 'runtime';
+export const RUNTIME_KEY_MAP: Record<string, string> = {
+  quietWindowMs: 'QUIET_WINDOW_MS',
+  hardTimeoutMs: 'HARD_TIMEOUT_MS',
+  groupMaxMessages: 'GROUP_MAX_MESSAGES',
+  micSeizeScope: 'MIC_SEIZE_SCOPE',
+  humanWaitTimeoutMs: 'HUMAN_WAIT_TIMEOUT_MS',
+};
+
+/** 把 runtime 命名空间换成环境变量键；不认识的键丢弃 */
+export function mapRuntime(data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data ?? {})) if (RUNTIME_KEY_MAP[k]) out[RUNTIME_KEY_MAP[k]] = v;
+  return out;
+}
+
 /** 只从本地取、不被配置中心覆盖的键 */
 export const LOCAL_ONLY_KEYS = new Set([
   'NODE_ENV', 'PORT', 'ENV_FILE', 'MYSQL_URL', 'REDIS_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'REDIS_DB',
@@ -64,17 +84,18 @@ export async function loadConfigCenter(
   const headers: Record<string, string> = target.GATEWAY_AUTH_TOKEN ? { 'x-gateway-token': target.GATEWAY_AUTH_TOKEN } : {};
   try {
     const data = await Promise.all(
-      CONFIG_NAMESPACES.map(async (ns) => {
+      [...CONFIG_NAMESPACES, RUNTIME_NAMESPACE].map(async (ns) => {
         const res = await fetchImpl(`${base}/api/config/${encodeURIComponent(ns)}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
         if (!res.ok) throw new Error(`命名空间 ${ns} 返回 HTTP ${res.status}`);
         const body = (await res.json()) as { data?: Record<string, unknown> };
         return body.data ?? {};
       }),
     );
+    data[data.length - 1] = mapRuntime(data[data.length - 1]);
     const { values, ignored } = mergeNamespaces(data);
     for (const [k, v] of Object.entries(values)) target[k] = v;
     const applied = Object.keys(values).sort();
-    log.log(`[配置中心] 已加载 ${CONFIG_NAMESPACES.join(' + ')}：${applied.length ? applied.join(', ') : '（空）'}${ignored.length ? `；忽略 ${ignored.join(', ')}` : ''}`);
+    log.log(`[配置中心] 已加载 ${[...CONFIG_NAMESPACES, RUNTIME_NAMESPACE].join(' + ')}：${applied.length ? applied.join(', ') : '（空）'}${ignored.length ? `；忽略 ${ignored.join(', ')}` : ''}`);
     return { status: 'loaded', applied, ignored };
   } catch (err) {
     const msg = `[配置中心] ${base} 读取失败：${(err as Error).message}`;

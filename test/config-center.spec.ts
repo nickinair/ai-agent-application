@@ -1,4 +1,4 @@
-import { CONFIG_NAMESPACES, loadConfigCenter, mergeNamespaces } from '../src/config/config-center';
+import { CONFIG_NAMESPACES, loadConfigCenter, mapRuntime, mergeNamespaces } from '../src/config/config-center';
 
 const quiet = { log: jest.fn(), warn: jest.fn() };
 
@@ -19,7 +19,7 @@ describe('配置中心加载（agent-shared + agent-app）', () => {
     });
     const r = await loadConfigCenter(env, f as any, quiet);
     expect(r.status).toBe('loaded');
-    expect(f.mock.calls.map((c) => c[0])).toEqual(['http://gw:3003/api/config/agent-shared', 'http://gw:3003/api/config/agent-app']);
+    expect(f.mock.calls.map((c) => c[0])).toEqual(['http://gw:3003/api/config/agent-shared', 'http://gw:3003/api/config/agent-app', 'http://gw:3003/api/config/runtime']);
     expect((f.mock.calls[0][1] as any).headers).toEqual({ 'x-gateway-token': 't0k' });
     expect(env).toMatchObject({ CRM_BASE_URL: 'http://crm', CRM_SERVICE_TOKEN: 'app', WECOM_BOT_ID: 'bot1', HUMAN_WAIT_TIMEOUT_MS: '60000' });
     expect(env.WECOM_BOT_ENABLED).toBeUndefined(); // 按机器决定，只取本地
@@ -46,5 +46,12 @@ describe('配置中心加载（agent-shared + agent-app）', () => {
     const f = fakeFetch({});
     expect((await loadConfigCenter({ GATEWAY_ENABLED: 'false' }, f as any, quiet)).status).toBe('disabled');
     expect(f).not.toHaveBeenCalled();
+  });
+
+  it('黄勇 runtime 命名空间（流控助手写入的小驼峰键）映射成运行时的环境变量，同一参数以 runtime 为准', async () => {
+    expect(mapRuntime({ quietWindowMs: 2500, micSeizeScope: 'CS_ONLY', unknownKey: 1 })).toEqual({ QUIET_WINDOW_MS: 2500, MIC_SEIZE_SCOPE: 'CS_ONLY' });
+    const env: NodeJS.ProcessEnv = {};
+    await loadConfigCenter(env, fakeFetch({ 'agent-app': { QUIET_WINDOW_MS: 3000 }, runtime: { quietWindowMs: 2500, humanWaitTimeoutMs: 90000 } }) as any, quiet);
+    expect(env).toMatchObject({ QUIET_WINDOW_MS: '2500', HUMAN_WAIT_TIMEOUT_MS: '90000' });
   });
 });
