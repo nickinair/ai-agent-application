@@ -336,6 +336,10 @@ export class WecomGroupMessageService {
         if (
           content.includes('@机器人') ||
           content.includes('@小助理') ||
+          content.includes('@车和网') ||
+          content.includes('@智能') ||
+          content.toLowerCase().includes('@bot') ||
+          content.toLowerCase().includes('@ai') ||
           (botId && content.includes(botId))
         ) {
           mentions.push('BOT');

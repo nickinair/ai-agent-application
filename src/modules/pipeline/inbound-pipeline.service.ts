@@ -129,6 +129,10 @@ export class InboundPipelineService {
         msg.text &&
           (msg.text.includes('@机器人') ||
             msg.text.includes('@小助理') ||
+            msg.text.includes('@车和网') ||
+            msg.text.includes('@智能') ||
+            msg.text.toLowerCase().includes('@bot') ||
+            msg.text.toLowerCase().includes('@ai') ||
             (botId && msg.text.includes(botId))),
       );
 
