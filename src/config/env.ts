@@ -31,6 +31,8 @@ const EnvSchema = z.object({
   WECOM_BOT_ID: z.string().optional(),
   /** 企业微信智能机器人 Secret (可选，未配置时跳过长连接启动) */
   WECOM_BOT_SECRET: z.string().optional(),
+  /** 机器人在群里显示的名字（如「车和网 CRM-agent」），用来识别群消息是否 @ 了机器人；不填时任何 @（@所有人 除外）都算 */
+  WECOM_BOT_NAME: z.string().optional(),
   /** 机器人所属租户：channel_account 没登记这个机器人时用它（默认 1） */
   WECOM_TENANT_ID: z.coerce.number().int().positive().optional(),
   /** 企业微信智能机器人 WebSocket 网关，可选，默认官方 wss://openws.work.weixin.qq.com */

@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
+  NotFoundException,
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -67,7 +68,7 @@ export class WecomController {
   }
 
   /**
-   * 测试主动向指定会话/群聊下发消息
+   * 测试主动向指定会话/群聊下发消息（只在 TEST_INJECT_ENABLED=true 时可用）
    * POST /api/admin/wecom/test-send
    */
   @Public()
@@ -76,6 +77,8 @@ export class WecomController {
   async testSend(
     @Body() body: { chatId: string; content: string },
   ): Promise<{ code: number; message: string; data?: any }> {
+    // 能让机器人往任意群发消息，只在测试环境开放
+    if (!this.env.TEST_INJECT_ENABLED) throw new NotFoundException();
     const client = this.botService.getClient();
     if (!client) {
       throw new Error('企业微信智能机器人长连接未建立，无法发送');

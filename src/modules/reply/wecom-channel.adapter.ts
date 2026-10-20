@@ -6,10 +6,12 @@ import { WecomBotService } from '../wecom/wecom-bot.service';
 const RETRIES = 2;
 const RETRY_DELAY_MS = 300;
 
-/** 群消息正文：先 @ 再正文（企微 markdown 用 <@userid> 提醒成员） */
-export function renderWecomMarkdown(msg: Pick<OutboundMessage, 'text' | 'mentions' | 'toUserId'>): string {
-  const mentions = msg.toUserId ? [] : [...new Set(msg.mentions ?? [])];
-  return [mentions.map((u) => `<@${u}>`).join(' '), msg.text].filter(Boolean).join(' ');
+/**
+ * 群消息正文。智能机器人主动推送（aibot_send_msg）的 markdown 不认 <@userid>，会原样显示成「<@NiKai>」，
+ * 所以只发正文，不带 @ 标记。
+ */
+export function renderWecomMarkdown(msg: Pick<OutboundMessage, 'text'>): string {
+  return msg.text ?? '';
 }
 
 /**

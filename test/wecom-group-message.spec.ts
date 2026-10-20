@@ -286,3 +286,45 @@ describe('企业微信机器人生命周期与状态服务 (WecomBotService)', (
     expect(status.stats.totalHandoffCount).toBe(0);
   });
 });
+
+describe('群消息是否 @ 了机器人', () => {
+  const env = (extra: Partial<Env> = {}) => ({ WECOM_BOT_ID: 'bot_01', ...extra }) as Env;
+  const frame = (chattype: string, content: string, userid = 'NiKai'): WsFrame<BaseMessage> =>
+    ({
+      headers: { req_id: 'r' },
+      body: { msgid: `m_${Math.random()}`, aibotid: 'bot_01', chatid: chattype === 'group' ? 'chat_1' : undefined, chattype, from: { userid }, msgtype: 'text', text: { content } },
+    }) as unknown as WsFrame<BaseMessage>;
+  const run = async (e: Env, f: WsFrame<BaseMessage>) => {
+    const pipeline = { onInbound: jest.fn().mockResolvedValue({}) };
+    const roles = { tenantId: jest.fn().mockResolvedValue(1), resolve: jest.fn().mockResolvedValue({ role: 'STAFF_OTHER', source: 'CHANNEL' }) };
+    const svc = new WecomGroupMessageService(e, pipeline as never, roles as never);
+    await svc.handleIncomingMessage({} as WSClient, f);
+    return pipeline.onInbound.mock.calls[0]?.[0];
+  };
+
+  it('配了机器人名字：按名字判断，名字里的空格也能清洗掉', () => {
+    const svc = new WecomGroupMessageService(env({ WECOM_BOT_NAME: '车和网 CRM-agent' }));
+    expect(svc.mentionsBot('测试 @车和网 CRM-agent')).toBe(true);
+    expect(svc.mentionsBot('@张三 测试')).toBe(false);
+    expect(svc.cleanMentionText('测试 @车和网 CRM-agent')).toBe('测试');
+  });
+
+  it('没配名字：任何 @ 都算，@所有人 不算', () => {
+    const svc = new WecomGroupMessageService(env());
+    expect(svc.mentionsBot('@车和网 测试')).toBe(true);
+    expect(svc.mentionsBot('@所有人 开会')).toBe(false);
+    expect(svc.mentionsBot('测试')).toBe(false);
+  });
+
+  it('员工群里普通发言不打 BOT 标（照常抢话筒），@机器人 才打', async () => {
+    const e = env({ WECOM_BOT_NAME: '车和网 CRM-agent' });
+    expect((await run(e, frame('group', '测试'))).mentions).toEqual([]);
+    expect((await run(e, frame('group', '测试 @车和网 CRM-agent'))).mentions).toContain('BOT');
+  });
+
+  it('单聊一律算对机器人说话，会话 ID 用发送人', async () => {
+    const msg = await run(env(), frame('single', '你好'));
+    expect(msg.mentions).toContain('BOT');
+    expect(msg.channelChatId).toBe('NiKai');
+  });
+});

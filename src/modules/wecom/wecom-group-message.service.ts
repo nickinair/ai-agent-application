@@ -34,10 +34,23 @@ export class WecomGroupMessageService {
    */
   cleanMentionText(rawContent: string): string {
     if (!rawContent) return '';
-    // 过滤常见企微 @ 结构（例如 @智能助理、@Bot_001、@所有人）及紧跟的空格
-    return rawContent
+    // 先去掉机器人全名（名字里可能有空格，如「车和网 CRM-agent」），再过滤常见企微 @ 结构（例如 @智能助理、@Bot_001、@所有人）及紧跟的空格
+    const botName = this.env.WECOM_BOT_NAME?.trim();
+    const text = botName ? rawContent.split(`@${botName}`).join(' ') : rawContent;
+    return text
       .replace(/@[\w\u4e00-\u9fa5\-_]+(?:\s+|$)/gi, '')
       .trim();
+  }
+
+  /**
+   * 群消息是否 @ 了机器人。长连接能收到群里的全部消息，不能一律当作 @机器人，
+   * 否则员工普通发言不再抢话筒（Q13）。配了 WECOM_BOT_NAME 时按名字精确判断；没配时任何 @（@所有人 除外）都算。
+   */
+  mentionsBot(rawContent: string): boolean {
+    if (!rawContent) return false;
+    const botName = this.env.WECOM_BOT_NAME?.trim();
+    if (botName) return rawContent.includes(`@${botName}`);
+    return /@(?!所有人)[\w\u4e00-\u9fa5\-_]+/.test(rawContent);
   }
 
   /**
@@ -251,11 +264,14 @@ export class WecomGroupMessageService {
           : { role: 'CUSTOMER' as const };
         if (member.role === 'BOT') return;
 
-        // 长连接收到的消息均为 @机器人 或 私聊机器人，显式打上 BOT 提醒标
-        const mentions: string[] = ['BOT'];
-        if (this.env.WECOM_BOT_ID) mentions.push(this.env.WECOM_BOT_ID);
-        const frameAibotId = (frame.body as any)?.aibotid;
-        if (frameAibotId && !mentions.includes(frameAibotId)) mentions.push(frameAibotId);
+        // 单聊就是对机器人说话；群聊只有真的 @ 了机器人才打 BOT 提醒标
+        const mentions: string[] = [];
+        if (isSingle || this.mentionsBot(parsed.content)) {
+          mentions.push('BOT');
+          if (this.env.WECOM_BOT_ID) mentions.push(this.env.WECOM_BOT_ID);
+          const frameAibotId = (frame.body as any)?.aibotid;
+          if (frameAibotId && !mentions.includes(frameAibotId)) mentions.push(frameAibotId);
+        }
 
         const contentText = parsed.cleanedContent || parsed.content || '';
 
@@ -334,6 +350,7 @@ export class WecomGroupMessageService {
 
         const mentions: string[] = [];
         if (
+          (this.env.WECOM_BOT_NAME && this.mentionsBot(content)) ||
           content.includes('@机器人') ||
           content.includes('@小助理') ||
           content.includes('@车和网') ||

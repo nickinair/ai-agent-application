@@ -173,11 +173,9 @@ describe('ReplyDispatcherService', () => {
 });
 
 describe('renderWecomMarkdown', () => {
-  it('群消息先 @ 再正文，@ 去重', () => {
-    expect(renderWecomMarkdown({ text: '您好', mentions: ['a', 'b', 'a'] })).toBe('<@a> <@b> 您好');
-  });
-  it('私信不带 @', () => {
-    expect(renderWecomMarkdown({ text: '交接包', mentions: ['a'], toUserId: 'cs' })).toBe('交接包');
+  it('只发正文，不带 <@userid>（智能机器人主动推送不认，会原样显示）', () => {
+    expect(renderWecomMarkdown({ text: '您好' })).toBe('您好');
+    expect(renderWecomMarkdown({ text: '交接包' })).toBe('交接包');
   });
 });
 
