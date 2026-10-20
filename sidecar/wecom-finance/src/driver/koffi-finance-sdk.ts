@@ -18,13 +18,16 @@ export class KoffiFinanceSdk {
   private secret: string;
   private sdkHandle: any = null;
   private koffiLib: any = null;
-  private SliceType: any = null;
 
   // 映射的 C 原生函数句柄
   private fnNewSdk: any = null;
   private fnInit: any = null;
-  private fnGetChatData: any = null;
+  private fnNewSlice: any = null;
   private fnFreeSlice: any = null;
+  private fnGetSliceLen: any = null;
+  private fnGetContentFromSlice: any = null;
+  private fnGetChatData: any = null;
+  private fnDecryptData: any = null;
   private fnDestroySdk: any = null;
 
   constructor(options: KoffiFinanceSdkOptions) {
@@ -53,15 +56,14 @@ export class KoffiFinanceSdk {
     }
 
     try {
-      this.SliceType = koffi.struct('Slice_t', {
-        buf: 'char*',
-        len: 'uint32_t',
-      });
-
       this.koffiLib = koffi.load(this.libPath);
 
       this.fnNewSdk = this.koffiLib.func('NewSdk', 'void*', []);
       this.fnInit = this.koffiLib.func('Init', 'int', ['void*', 'str', 'str']);
+      this.fnNewSlice = this.koffiLib.func('NewSlice', 'void*', []);
+      this.fnFreeSlice = this.koffiLib.func('FreeSlice', 'void', ['void*']);
+      this.fnGetSliceLen = this.koffiLib.func('GetSliceLen', 'int', ['void*']);
+      this.fnGetContentFromSlice = this.koffiLib.func('GetContentFromSlice', 'str', ['void*']);
       this.fnGetChatData = this.koffiLib.func('GetChatData', 'int', [
         'void*',
         'uint64_t',
@@ -69,9 +71,9 @@ export class KoffiFinanceSdk {
         'str',
         'str',
         'int',
-        koffi.out(koffi.pointer(this.SliceType)),
+        'void*',
       ]);
-      this.fnFreeSlice = this.koffiLib.func('FreeSlice', 'void', [koffi.pointer(this.SliceType)]);
+      this.fnDecryptData = this.koffiLib.func('DecryptData', 'int', ['str', 'str', 'void*']);
       this.fnDestroySdk = this.koffiLib.func('DestroySdk', 'void', ['void*']);
 
       // 1. 创建 SDK 句柄
@@ -104,31 +106,38 @@ export class KoffiFinanceSdk {
       throw new Error('[KoffiFinanceSdk] SDK 尚未初始化，请先调用 init()');
     }
 
-    // 分配输出切片结构体内存
-    const sliceObj: any = { buf: null, len: 0 };
+    // 分配输出切片结构体指针
+    const slice = this.fnNewSlice();
+    if (!slice) {
+      throw new Error('[KoffiFinanceSdk] NewSlice 返回空指针');
+    }
 
     try {
       const ret = this.fnGetChatData(
         this.sdkHandle,
         BigInt(seq),
         limit,
-        null, // proxy
-        null, // passwd
+        '', // proxy
+        '', // passwd
         timeout,
-        sliceObj,
+        slice,
       );
 
       if (ret !== 0) {
         throw new Error(`GetChatData 失败，企微 C 接口返回码: ${ret}`);
       }
 
-      if (!sliceObj.buf || sliceObj.len === 0) {
+      const len = this.fnGetSliceLen(slice);
+      if (len <= 0) {
         return [];
       }
 
       // 提取 C 缓冲区内的原始 JSON 字符串
-      const koffi = require('koffi');
-      const jsonStr = koffi.decode(sliceObj.buf, 'char', sliceObj.len);
+      const jsonStr = this.fnGetContentFromSlice(slice);
+      if (!jsonStr) {
+        return [];
+      }
+
       const parsed: FinanceChatDataResponse = JSON.parse(jsonStr);
 
       if (parsed.errcode !== 0) {
@@ -137,10 +146,48 @@ export class KoffiFinanceSdk {
 
       return parsed.chatdata || [];
     } finally {
-      // 无论成功还是异常，必须释放企微 C-SDK 堆内存
-      if (sliceObj && sliceObj.buf && this.fnFreeSlice) {
+      // 无论成功还是异常，必须释放企微 C-SDK 切片内存
+      if (slice && this.fnFreeSlice) {
         try {
-          this.fnFreeSlice(sliceObj);
+          this.fnFreeSlice(slice);
+        } catch (freeErr: any) {
+          console.warn(`[KoffiFinanceSdk] 释放 C 切片内存警告: ${freeErr.message}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * 调用 C 函数 DecryptData 解密聊天消息正文
+   * @param encryptKey 解密后的随机密钥明文字符串
+   * @param encryptChatMsg 密文正文
+   */
+  public decryptData(encryptKey: string, encryptChatMsg: string): string {
+    if (!this.fnDecryptData) {
+      throw new Error('[KoffiFinanceSdk] DecryptData 函数未初始化');
+    }
+
+    const slice = this.fnNewSlice();
+    if (!slice) {
+      throw new Error('[KoffiFinanceSdk] NewSlice 返回空指针');
+    }
+
+    try {
+      const ret = this.fnDecryptData(encryptKey, encryptChatMsg, slice);
+      if (ret !== 0) {
+        throw new Error(`DecryptData 失败，企微 C 接口返回码: ${ret}`);
+      }
+
+      const jsonStr = this.fnGetContentFromSlice(slice);
+      if (!jsonStr) {
+        throw new Error('DecryptData 返回空明文');
+      }
+
+      return jsonStr;
+    } finally {
+      if (slice && this.fnFreeSlice) {
+        try {
+          this.fnFreeSlice(slice);
         } catch (freeErr: any) {
           console.warn(`[KoffiFinanceSdk] 释放 C 切片内存警告: ${freeErr.message}`);
         }

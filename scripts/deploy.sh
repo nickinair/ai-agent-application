@@ -949,7 +949,7 @@ deploy_a3() {
     --network "$NETWORK" \
     --network-alias a3-app \
     --restart unless-stopped \
-    -p "${A3_PORT}:3002" \
+    -p "127.0.0.1:${A3_PORT}:3002" \
     --add-host=host.docker.internal:host-gateway \
     -e "NODE_ENV=${ENV}" \
     -e "PORT=3002" \

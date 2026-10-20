@@ -45,6 +45,13 @@ export class NativeDriver implements IFinanceDriver {
     return this.sdk.getChatData(seq, limit, timeout);
   }
 
+  public decryptData(encryptKey: string, encryptChatMsg: string): string {
+    if (!this.sdk) {
+      throw new Error('[NativeDriver] SDK 尚未初始化，请先调用 init()');
+    }
+    return this.sdk.decryptData(encryptKey, encryptChatMsg);
+  }
+
   public async destroy(): Promise<void> {
     if (this.sdk) {
       this.sdk.destroy();

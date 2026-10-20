@@ -18,3 +18,6 @@ data/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# 腾讯官方 C-SDK 二进制（从官方 CDN 下载，不入库）
+lib/

@@ -324,7 +324,11 @@ export class GatewayClient {
       // 获取第一个活跃实例
       const instance = resBody.data[0];
       const webhookPath = instance.metadata?.webhookPath || '/api/admin/wecom/finance-inbound';
-      const resolvedUrl = `http://${instance.host}:${instance.port}${webhookPath}`;
+      let host = instance.host;
+      if (host === '127.0.0.1' || host === 'localhost') {
+        host = 'a3-app';
+      }
+      const resolvedUrl = `http://${host}:${instance.port}${webhookPath}`;
       return resolvedUrl;
     } catch {
       return null;

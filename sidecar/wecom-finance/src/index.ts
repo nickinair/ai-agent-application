@@ -180,7 +180,11 @@ async function bootstrap() {
 
   await driver.init();
 
-  const financeCrypto = new FinanceCrypto(rsaPrivateKeyPem, config.rsaPrivateKeyPassphrase);
+  const nativeDecrypt = config.driverMode === 'native' && typeof (driver as any).decryptData === 'function'
+    ? (key: string, msg: string) => (driver as any).decryptData(key, msg)
+    : undefined;
+
+  const financeCrypto = new FinanceCrypto(rsaPrivateKeyPem, config.rsaPrivateKeyPassphrase, nativeDecrypt);
   const seqManager = new SeqManager(config.cursorStoragePath);
 
   const worker = new FinanceWorker(driver, financeCrypto, seqManager, config, undefined, dispatcher);

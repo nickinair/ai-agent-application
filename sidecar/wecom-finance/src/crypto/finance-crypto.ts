@@ -4,10 +4,16 @@ import { EncryptedChatData, DecryptedFinanceMessage } from '../types/finance.typ
 export class FinanceCrypto {
   private rsaPrivateKey: string;
   private passphrase?: string;
+  private nativeDecrypt?: (key: string, msg: string) => string;
 
-  constructor(rsaPrivateKey: string, passphrase?: string) {
+  constructor(
+    rsaPrivateKey: string,
+    passphrase?: string,
+    nativeDecrypt?: (key: string, msg: string) => string,
+  ) {
     this.rsaPrivateKey = rsaPrivateKey;
     this.passphrase = passphrase;
+    this.nativeDecrypt = nativeDecrypt;
   }
 
   /**
@@ -26,10 +32,6 @@ export class FinanceCrypto {
 
     try {
       const decrypted = crypto.privateDecrypt(privateKeyConfig, buffer);
-      // 企微官方规范：会话存档随机密钥长度固定为 16 字节或 32 字节
-      if (decrypted.length !== 16 && decrypted.length !== 32) {
-        throw new Error(`解密出的随机密钥长度非法: ${decrypted.length} 字节 (期望为 16 或 32 字节)`);
-      }
       return decrypted;
     } catch (err: any) {
       throw new Error(`[FinanceCrypto] 解密随机密钥失败 (RSA Private Decrypt Failed): ${err.message}`);
@@ -71,8 +73,17 @@ export class FinanceCrypto {
    * 一站式解密单条企微存档数据
    */
   public decrypt(item: EncryptedChatData): DecryptedFinanceMessage {
-    const aesKey = this.decryptRandomKey(item.encrypt_random_key);
-    return this.decryptChatMsg(item.encrypt_chat_msg, aesKey);
+    const randomKeyBuf = this.decryptRandomKey(item.encrypt_random_key);
+
+    // 如果注册了官方 C-SDK 的 nativeDecrypt，直接调用企微原生 DecryptData
+    if (this.nativeDecrypt) {
+      const keyStr = randomKeyBuf.toString('utf8');
+      const jsonStr = this.nativeDecrypt(keyStr, item.encrypt_chat_msg);
+      return JSON.parse(jsonStr) as DecryptedFinanceMessage;
+    }
+
+    // 否则降级使用纯 JS AES-CBC 解密 (用于单元测试和 Mock 模式)
+    return this.decryptChatMsg(item.encrypt_chat_msg, randomKeyBuf);
   }
 
   /**
