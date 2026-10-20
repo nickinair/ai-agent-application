@@ -115,16 +115,60 @@ export class InboundPipelineService {
       return { status: 'STAFF_HANDLED', messageId, conversationId: convId };
     }
 
+    // ③ 检查是否显式 @机器人
+    const botId = this.env.WECOM_BOT_ID;
+    const hasMentionBot =
+      msg.mentions?.some(
+        (m) =>
+          m === 'BOT' ||
+          m.toLowerCase().includes('bot') ||
+          (botId && m === botId) ||
+          m === 'ai_assistant',
+      ) ||
+      Boolean(
+        msg.text &&
+          (msg.text.includes('@机器人') ||
+            msg.text.includes('@小助理') ||
+            (botId && msg.text.includes(botId))),
+      );
+
     // ③ 专职客服或内部员工：触发话筒抢夺与转人工通知机制（§11.3）
-    if (role === 'STAFF_CS' || role === 'STAFF_OTHER') {
+    if (role === 'STAFF_CS') {
       this.logger.log(
-        `👔 内部员工/客服发言，标记话筒为人工持有: convId=${convId}, staffId=${msg.sender.channelUserId}`,
+        `👔 专职客服发言，进入客服发言处理链路: convId=${convId}, staffId=${msg.sender.channelUserId}`,
       );
       await this.handleStaffMessage(convId, msg);
       return { status: 'STAFF_HANDLED', messageId, conversationId: convId };
     }
 
-    // ④ 外部客户消息（CUSTOMER）：检查话筒状态分流
+    if (role === 'STAFF_OTHER') {
+      if (!hasMentionBot) {
+        this.logger.log(
+          `👔 内部员工未@机器人发言，标记话筒为人工持有: convId=${convId}, staffId=${msg.sender.channelUserId}`,
+        );
+        await this.handleStaffMessage(convId, msg);
+        return { status: 'STAFF_HANDLED', messageId, conversationId: convId };
+      }
+
+      // 若内部员工 @机器人 发言：
+      // 如果启用了交还话筒开关，走交接语下发流程
+      if (this.env.MIC_RETURN_BY_MENTION_ENABLED) {
+        this.logger.log(`🛎️ [话筒交还] 识别到员工 @机器人 发言，触发显式交还话筒: convId=${convId}`);
+        await this.handleStaffMessage(convId, msg);
+        return { status: 'STAFF_HANDLED', messageId, conversationId: convId };
+      }
+
+      // 否则为员工向机器人发起提问/指令：重置话筒归 BOT，并继续入缓冲池由智能体回答！
+      this.logger.log(
+        `🤖 内部员工 @机器人 提问，话筒切回 BOT 并入缓冲池处理: convId=${convId}, staffId=${msg.sender.channelUserId}`,
+      );
+      if (this.microphoneService) {
+        await this.microphoneService.returnByMention(convId, msg.sender.channelUserId);
+      }
+      await this.timerService?.cancelHumanWait?.(convId, 0);
+    }
+
+    // ④ 外部客户消息（CUSTOMER）或员工提问：检查话筒状态分流
     const senderId = msg.sender.channelUserId;
     const micStatus = this.microphoneService
       ? await this.microphoneService.getMicStatus(convId)
@@ -155,13 +199,15 @@ export class InboundPipelineService {
     const meta = await this.bufferService.push(convId, senderId, messageId, msg.sentAt);
 
     this.logger.log(
-      `📥 客户消息入缓冲池 [convId=${convId}, sender=${senderId}, count=${meta.count}, version=${meta.version}, isFirst=${meta.isFirst}]`,
+      `📥 消息入缓冲池 [convId=${convId}, sender=${senderId}, count=${meta.count}, version=${meta.version}, isFirst=${meta.isFirst}]`,
     );
 
     // 会话首条客户消息：预约占位应答（每个会话只发一次，Q10）
-    await this.placeholderService
-      ?.onCustomerMessage(msg.tenantId, convId, senderId)
-      .catch((err: Error) => this.logger.warn(`预约占位应答失败: ${err.message}`));
+    if (role === 'CUSTOMER') {
+      await this.placeholderService
+        ?.onCustomerMessage(msg.tenantId, convId, senderId)
+        .catch((err: Error) => this.logger.warn(`预约占位应答失败: ${err.message}`));
+    }
 
     // 检查是否达到条数阈值立即封组（默认 5 条）
     if (meta.count >= this.env.GROUP_MAX_MESSAGES) {
@@ -275,6 +321,20 @@ export class InboundPipelineService {
     const newConvId = res.insertId;
     await redis.set(activeKey, String(newConvId));
     return { id: newConvId };
+  }
+
+  /**
+   * 判定客服发言是否为专属交接/退法语境话术
+   */
+  private isStaffHandoverPhrase(text?: string | null): boolean {
+    if (!text) return false;
+    return (
+      text.includes('交给你继续服务') ||
+      text.includes('已沟通完毕') ||
+      text.includes('接管下') ||
+      text.includes('辛苦你继续') ||
+      text.includes('我退出了')
+    );
   }
 
   /**

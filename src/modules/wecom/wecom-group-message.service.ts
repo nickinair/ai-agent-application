@@ -216,9 +216,11 @@ export class WecomGroupMessageService {
     const parsed = this.parseIncomingMessage(frame);
     if (!parsed) return;
 
-    // 仅处理群聊消息（按本平台群渠道架构）
-    if (parsed.chatType !== 'group') {
-      this.logger.debug(`忽略非群聊消息: chattype=${parsed.chatType}, msgid=${parsed.msgId}`);
+    // 仅处理群聊与私聊机器人的单聊消息
+    const isGroup = parsed.chatType === 'group';
+    const isSingle = parsed.chatType === 'single';
+    if (!isGroup && !isSingle) {
+      this.logger.debug(`忽略非群聊/单聊消息: chattype=${parsed.chatType}, msgid=${parsed.msgId}`);
       return;
     }
 
@@ -238,23 +240,38 @@ export class WecomGroupMessageService {
     if (this.pipelineService) {
       try {
         const tenantId = this.memberRoles ? await this.memberRoles.tenantId() : 1;
+        const channelChatId = parsed.chatId || (isSingle ? parsed.userId : '');
+        if (!channelChatId) {
+          this.logger.warn(`无法解析有效 channelChatId: chatType=${parsed.chatType}, userId=${parsed.userId}`);
+          return;
+        }
+
         const member = this.memberRoles
-          ? await this.memberRoles.resolve(tenantId, 'wecom_group', parsed.chatId, parsed.userId)
+          ? await this.memberRoles.resolve(tenantId, 'wecom_group', channelChatId, parsed.userId)
           : { role: 'CUSTOMER' as const };
         if (member.role === 'BOT') return;
+
+        // 长连接收到的消息均为 @机器人 或 私聊机器人，显式打上 BOT 提醒标
+        const mentions: string[] = ['BOT'];
+        if (this.env.WECOM_BOT_ID) mentions.push(this.env.WECOM_BOT_ID);
+        const frameAibotId = (frame.body as any)?.aibotid;
+        if (frameAibotId && !mentions.includes(frameAibotId)) mentions.push(frameAibotId);
+
+        const contentText = parsed.cleanedContent || parsed.content || '';
+
         const inboundMsg: InboundMessage = {
           tenantId,
           channel: 'wecom_group',
-          channelChatId: parsed.chatId,
+          channelChatId,
           channelMsgId: parsed.msgId,
           chatName: (parsed as any).chatName,
           sender: {
             role: member.role,
             channelUserId: parsed.userId,
           },
-          mentions: [],
+          mentions,
           type: (parsed.msgType === 'mixed' ? 'other' : parsed.msgType) as any,
-          text: parsed.cleanedContent,
+          text: contentText,
           mediaUrl: parsed.mediaInfo?.url,
           sentAt: parsed.createTime || Date.now(),
         };
@@ -300,6 +317,51 @@ export class WecomGroupMessageService {
 
     this.stats.receivedCount++;
     this.stats.lastReceivedAt = new Date().toISOString();
+
+    // 投递核心入站流水线（全量感知、话筒抢占、客户消息汇总）
+    if (this.pipelineService && event.roomid) {
+      try {
+        const tenantId = this.memberRoles ? await this.memberRoles.tenantId() : 1;
+        const member = this.memberRoles
+          ? await this.memberRoles.resolve(tenantId, 'wecom_group', event.roomid, event.sender)
+          : { role: 'CUSTOMER' as const };
+
+        if (member.role === 'BOT') return { success: true, handled: true };
+
+        const content = event.payload?.text?.content || event.contentSummary || '';
+        const cleaned = this.cleanMentionText(content);
+        const botId = this.env.WECOM_BOT_ID;
+
+        const mentions: string[] = [];
+        if (
+          content.includes('@机器人') ||
+          content.includes('@小助理') ||
+          (botId && content.includes(botId))
+        ) {
+          mentions.push('BOT');
+          if (botId) mentions.push(botId);
+        }
+
+        const inboundMsg: InboundMessage = {
+          tenantId,
+          channel: 'wecom_group',
+          channelChatId: event.roomid,
+          channelMsgId: event.msgid,
+          sender: {
+            role: member.role,
+            channelUserId: event.sender,
+          },
+          mentions,
+          type: (event.msgtype === 'text' ? 'text' : event.msgtype === 'voice' ? 'voice' : 'other') as any,
+          text: cleaned || content,
+          sentAt: event.timestamp || Date.now(),
+        };
+
+        await this.pipelineService.onInbound(inboundMsg);
+      } catch (err: any) {
+        this.logger.error(`会话存档投递流水线异常: ${err.message}`, err.stack);
+      }
+    }
 
     return { success: true, handled: true };
   }

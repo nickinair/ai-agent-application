@@ -9,6 +9,7 @@ import { BufferService } from './buffer.service';
 import { StateTransitionService } from './state-transition.service';
 import { MicrophoneService } from './microphone.service';
 import { MysqlService } from '../../database/mysql.service';
+import type { RowDataPacket } from 'mysql2';
 import { MetricsService, type VoidReason } from '../../infra/metrics.service';
 import {
   CHANNEL_ADAPTER,
@@ -390,10 +391,26 @@ export class FinalCheckService {
     // 2. 话筒完好，安全执行网络下发
     const replyText = outboundPayload?.text || ctx.reply?.text || '';
     if (this.channelAdapter) {
+      let targetChatId = outboundPayload?.channelChatId;
+      if ((!targetChatId || targetChatId === String(ctx.conversationId)) && this.mysqlService) {
+        try {
+          const pool = this.mysqlService.getPool();
+          const [convRows] = await pool.query<RowDataPacket[]>(
+            'SELECT channel_chat_id FROM conversation WHERE id = ?',
+            [ctx.conversationId],
+          );
+          if (convRows?.[0]?.channel_chat_id) {
+            targetChatId = convRows[0].channel_chat_id;
+          }
+        } catch (err: any) {
+          this.logger.warn(`查询会话渠道群 ID 失败: ${err.message}`);
+        }
+      }
+
       const msg: OutboundMessage = {
         tenantId: ctx.tenantId || 1,
         channel: outboundPayload?.channel || 'wecom_group',
-        channelChatId: outboundPayload?.channelChatId || String(ctx.conversationId),
+        channelChatId: targetChatId || outboundPayload?.channelChatId || String(ctx.conversationId),
         kind: outboundPayload?.kind || 'REPLY',
         text: replyText,
         conversationId: ctx.conversationId,

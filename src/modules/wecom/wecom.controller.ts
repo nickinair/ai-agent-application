@@ -65,4 +65,29 @@ export class WecomController {
       handled: result.handled,
     };
   }
+
+  /**
+   * 测试主动向指定会话/群聊下发消息
+   * POST /api/admin/wecom/test-send
+   */
+  @Public()
+  @Post('test-send')
+  @HttpCode(HttpStatus.OK)
+  async testSend(
+    @Body() body: { chatId: string; content: string },
+  ): Promise<{ code: number; message: string; data?: any }> {
+    const client = this.botService.getClient();
+    if (!client) {
+      throw new Error('企业微信智能机器人长连接未建立，无法发送');
+    }
+    const res = await client.sendMessage(body.chatId, {
+      msgtype: 'markdown',
+      markdown: { content: body.content },
+    });
+    return {
+      code: 0,
+      message: 'success',
+      data: res,
+    };
+  }
 }
