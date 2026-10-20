@@ -178,6 +178,18 @@ export class InboundPipelineService {
       ? await this.microphoneService.getMicStatus(convId)
       : { owner: 'BOT' as const, isHandoffLocked: false, epoch: 1 };
 
+    // 若客户显式 @机器人 提问，即便之前话筒被人工持有，也强制交还给 BOT 答复
+    if (hasMentionBot && micStatus.owner === 'HUMAN') {
+      this.logger.log(
+        `🤖 客户显式 @机器人 提问，话筒强制切回 BOT: convId=${convId}, senderId=${senderId}`,
+      );
+      if (this.microphoneService) {
+        await this.microphoneService.returnToBot(convId, 'MENTION_RETURN', true);
+      }
+      await this.timerService?.cancelHumanWait?.(convId, 0);
+      micStatus.owner = 'BOT';
+    }
+
     if (micStatus.owner === 'HUMAN') {
       // 话筒在人工手中：客户消息照常进入缓冲池累积，但不触发 3s 静默自动封组回答
       const meta = await this.bufferService.push(convId, senderId, messageId, msg.sentAt);
