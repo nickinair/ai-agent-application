@@ -201,7 +201,9 @@ export class ReplyDispatcherService implements OnModuleInit {
       }
       const staffId = h.staff?.wecomUserId ?? '';
       if (h.lockMic) {
-        await this.mic.lockHandoff(post.conversationId, staffId, `AI_HANDOFF_${h.trigger}`);
+        const locked = await this.mic.lockHandoff(post.conversationId, staffId, `AI_HANDOFF_${h.trigger}`);
+        // 锁定型转人工同样等人工 HUMAN_WAIT_TIMEOUT_MS（默认 60s），期间人工没发言则强制交还机器人
+        await this.timers.scheduleHumanWait(post.conversationId, post.senderUserId, locked.epoch, undefined, true);
       } else {
         const seized = await this.mic.seizeByStaff(post.conversationId, staffId, 'STAFF_CS', `AI_HANDOFF_${h.trigger}`);
         await this.timers.scheduleHumanWait(post.conversationId, post.senderUserId, seized.epoch);

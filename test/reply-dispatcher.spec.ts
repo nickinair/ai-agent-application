@@ -127,12 +127,12 @@ describe('ReplyDispatcherService', () => {
     expect(sealer.onTurnDone).not.toHaveBeenCalled();
   });
 
-  it('转人工且锁话筒：私信交接包，话筒锁给人工，不预约自动接回', async () => {
+  it('转人工且锁话筒：私信交接包，话筒锁给人工，预约人工未回复强制接回', async () => {
     const privateMessage = { tenantId: 1, channel: 'wecom_group' as const, channelChatId: 'chat_1', kind: 'HANDOFF_PACKAGE' as const, text: '交接包', toUserId: 'cs_li' };
     await svc.dispatch(makePost({ handoff: { trigger: 'SENSITIVE', evidence: 'P0', staff: { id: 5, name: '李客服', wecomUserId: 'cs_li' }, privateMessage, lockMic: true } }));
     expect(channel.send).toHaveBeenCalledWith(privateMessage);
     expect(mic.lockHandoff).toHaveBeenCalledWith(10, 'cs_li', 'AI_HANDOFF_SENSITIVE');
-    expect(timers.scheduleHumanWait).not.toHaveBeenCalled();
+    expect(timers.scheduleHumanWait).toHaveBeenCalledWith(10, 'cust_1', 3, undefined, true);
   });
 
   it('转人工不锁话筒：人工持话筒，预约人工未回复自动接回', async () => {

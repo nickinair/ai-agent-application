@@ -48,6 +48,8 @@ export interface HumanWaitJobData {
   convId: number | string;
   senderId: string;
   micEpoch: number;
+  /** AI 主动转人工（话筒锁定）后的等待：到点人工仍未发言则强制解锁交还机器人 */
+  force?: boolean;
 }
 
 export type TimerJobData = QuietJobData | HardJobData | IdleJobData | HumanWaitJobData;
@@ -220,6 +222,7 @@ export class TimerService implements OnModuleInit {
     senderId: string,
     micEpoch: number,
     delayMs?: number,
+    force = false,
   ): Promise<void> {
     const delay = delayMs ?? (this.env.HUMAN_WAIT_TIMEOUT_MS ?? 60000);
     const queue = this.queueService.getQueue<HumanWaitJobData>(QUEUE_NAMES.timer);
@@ -232,6 +235,7 @@ export class TimerService implements OnModuleInit {
         convId,
         senderId,
         micEpoch,
+        force,
       },
       {
         jobId,
@@ -425,17 +429,19 @@ export class TimerService implements OnModuleInit {
 
     const micStatus = await this.microphoneService.getMicStatus(data.convId);
 
-    // 校验：话筒依然为 HUMAN、epoch 匹配、且未被主动转人工锁定
+    // 校验：话筒依然为 HUMAN、epoch 匹配；锁定状态只有转人工等待（force）才允许解锁。
+    // 人工期间发言会经 cancelHumanWait 取消本任务，所以到点仍在说明人工确实没回复
     if (
       micStatus.owner === 'HUMAN' &&
       micStatus.epoch === data.micEpoch &&
-      !micStatus.isHandoffLocked
+      (data.force || !micStatus.isHandoffLocked)
     ) {
       this.logger.log(
-        `⏱️ [60s 人工未回复超时] 会话 #${data.convId} 人工超过 60s 未回复，话筒自动切回 BOT 并触发立即封组 (S9 用例)`,
+        `⏱️ [人工未回复超时] 会话 #${data.convId} 人工超时未回复${data.force ? '（转人工锁定已解除）' : ''}，话筒自动切回 BOT 并触发立即封组 (S9 用例)`,
       );
       // 1. 自动将话筒交还 BOT
-      await this.microphoneService.returnToBot(data.convId, 'HUMAN_TIMEOUT');
+      if (data.force) await this.microphoneService.returnToBot(data.convId, 'HANDOFF_TIMEOUT', true);
+      else await this.microphoneService.returnToBot(data.convId, 'HUMAN_TIMEOUT');
 
       // 2. 立即将客户积累的消息封组回复（自动接回时不发占位应答）
       await this.triggerSeal(data.convId, data.senderId, 'HUMAN_TIMEOUT');
