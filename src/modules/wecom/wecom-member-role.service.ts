@@ -105,6 +105,8 @@ export class WecomMemberRoleService {
     ]);
     const botIds = new Set<string>(bots.map((b) => String(b.bot_user_id)));
     if (this.env.WECOM_BOT_ID) botIds.add(this.env.WECOM_BOT_ID);
+    // RPA 代发账号（真人企微账号模拟发送）：它发出的消息由会话存档收回时按机器人处理，避免被当成员工抢话筒
+    for (const id of (process.env.WECOM_RPA_BOT_USER_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean)) botIds.add(id);
     const cfg = { botIds, csStaffIds: new Set<string>(staff.map((s) => String(s.wecom_user_id))), at: Date.now() };
     this.configs.set(tenantId, cfg);
     return cfg;

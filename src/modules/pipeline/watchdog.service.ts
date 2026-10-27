@@ -40,8 +40,8 @@ export interface InflightData {
 export class WatchdogService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(WatchdogService.name);
 
-  /** 在途超时判定时限（默认 8000ms，根据 PRD S18 用例规范） */
-  private timeoutMs = 8000;
+  /** 在途超时判定时限（默认 8000ms，根据 PRD S18 用例规范）；RPA 代发链路较慢，可用 WATCHDOG_TIMEOUT_MS 放宽 */
+  private timeoutMs = Number(process.env.WATCHDOG_TIMEOUT_MS) > 0 ? Number(process.env.WATCHDOG_TIMEOUT_MS) : 8000;
 
   /** 周期巡检间隔（默认 5000ms） */
   private scanIntervalMs = 5000;

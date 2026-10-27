@@ -1,0 +1,12 @@
+{
+  "app_backend_url": "http://124.222.117.150/api/admin/wecom/finance-inbound",
+  "inbound_enabled": false,
+  "sidecar_token": "",
+  "self_names": ["\u8f66\u548c\u7f51\u5ba2\u670d"],
+  "rpa_server_port": 5005,
+  "bot_name": "\u8f66\u548c\u7f51\u667a\u80fdAgent",
+  "poll_interval_sec": 1.5,
+  "group_whitelist": [],
+  "min_send_delay_sec": 1.0,
+  "max_send_delay_sec": 2.5
+}
