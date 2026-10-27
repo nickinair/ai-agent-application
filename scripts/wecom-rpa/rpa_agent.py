@@ -180,27 +180,56 @@ class WecomRPAEngine:
         y = int(rect.top + (rect.bottom - rect.top) * ry)
         auto.Click(x, y, waitTime=0.2)
 
-    def send_message(self, chat_title: str, text: str) -> bool:
+    def get_current_chat_title(self) -> Optional[str]:
+        try:
+            header = self.wecom_window.PaneControl(searchDepth=5, ClassName="ChatHeaderView")
+            if header.Exists(0, 0):
+                return header.TextControl().Name
+        except Exception:
+            pass
+        return None
+
+    def send_message(self, chat_title: str, text: str, mentions: Optional[List[str]] = None) -> bool:
         with self.lock:
             if not self.ensure_active():
                 return False
 
             try:
                 time.sleep(0.3)
-                # 1) open target chat: Ctrl+F focuses WeCom global search
-                auto.SendKeys("{Ctrl}f", waitTime=0.3)
-                auto.SendKeys("{Ctrl}a", waitTime=0.1)
-                pyperclip.copy(chat_title)
-                auto.SendKeys("{Ctrl}v", waitTime=0.2)
-                time.sleep(float(config.get("search_wait_sec", 1.2)))
-                auto.SendKeys("{Enter}", waitTime=0.6)
+                main_hwnd = getattr(self.wecom_window, "NativeWindowHandle", 0)
+                current_title = self.get_current_chat_title()
+                # 1) open target chat only if not already active
+                if not current_title or (chat_title not in current_title and current_title not in chat_title):
+                    auto.SendKeys("{Ctrl}f", waitTime=0.3)
+                    auto.SendKeys("{Ctrl}a", waitTime=0.1)
+                    pyperclip.copy(chat_title)
+                    auto.SendKeys("{Ctrl}v", waitTime=0.2)
+                    time.sleep(float(config.get("search_wait_sec", 1.2)))
+                    auto.SendKeys("{Enter}", waitTime=0.8)
+                    # search popup still in front => no chat matched; close it and fail
+                    fg = ctypes.windll.user32.GetForegroundWindow()
+                    if main_hwnd and fg and fg != main_hwnd:
+                        auto.SendKeys("{Escape}", waitTime=0.2)
+                        auto.SendKeys("{Escape}", waitTime=0.2)
+                        logger.error(f"Chat not found by search: [{chat_title}]. Give the group a name and map it in RPA_ROOM_TITLES.")
+                        return False
+                else:
+                    auto.SendKeys("{Escape}", waitTime=0.1)
 
                 # 2) focus message input box (bottom of right pane), ratios configurable
                 self._click_ratio(float(config.get("input_x_ratio", 0.62)),
                                   float(config.get("input_y_ratio", 0.90)))
                 time.sleep(0.3)
 
-                # 3) paste and send
+                # 3) real @mentions: type '@'+name to open the member picker, Enter selects
+                for name in (mentions or []):
+                    if not name:
+                        continue
+                    auto.SendKeys("@", waitTime=0.3)
+                    auto.SendKeys(name, waitTime=float(config.get("mention_wait_sec", 1.0)))
+                    auto.SendKeys("{Enter}", waitTime=0.3)
+
+                # 4) paste and send
                 pyperclip.copy(text)
                 auto.SendKeys("{Ctrl}v", waitTime=0.3)
                 auto.SendKeys("{Enter}", waitTime=0.2)
@@ -282,7 +311,7 @@ def run_http_server():
         success = False
         try:
             with auto.UIAutomationInitializerInThread():
-                success = engine.send_message(chat_title, content)
+                success = engine.send_message(chat_title, content, data.get("mentions") or [])
         except Exception:
             import traceback
             logger.error("RPA send exception:\n" + traceback.format_exc())

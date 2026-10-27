@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import type { RowDataPacket } from 'mysql2/promise';
 import type { ChannelAdapter, OutboundMessage } from '../../contracts';
+import { MysqlService } from '../../database/mysql.service';
 import { WecomBotService } from '../wecom/wecom-bot.service';
 
 const RETRIES = 2;
@@ -97,7 +99,7 @@ export class WecomChannelAdapter implements ChannelAdapter {
         const resp = await fetch(rpaUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatId: roomTitle ?? target, content: renderWecomMarkdown(msg) }),
+          body: JSON.stringify({ chatId: roomTitle ?? target, content: renderWecomMarkdown(msg), mentions: await this.staffMentionNames(msg) }),
           signal: AbortSignal.timeout(20_000),
         });
         const body = (await resp.json().catch(() => ({}))) as { code?: number; message?: string };
@@ -124,5 +126,26 @@ export class WecomChannelAdapter implements ChannelAdapter {
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  /**
+   * RPA 发送时需要真正 @ 的人：只取 mentions 里的客服（cs_staff），返回群内显示名，由 RPA 在输入框里逐个 @ 选人。
+   * 客户是被回复方，不单独 @；查询失败时返回空表，不影响正文发送。
+   */
+  private async staffMentionNames(msg: OutboundMessage): Promise<string[]> {
+    const ids = (msg.mentions ?? []).filter((id) => id && !/^w[mo]/.test(id));
+    if (!ids.length || msg.toUserId) return [];
+    try {
+      const mysql = this.moduleRef.get(MysqlService, { strict: false });
+      const [rows] = await mysql.getPool().query<RowDataPacket[]>(
+        `SELECT wecom_user_id, name FROM cs_staff WHERE tenant_id = ? AND wecom_user_id IN (?) AND status = 1`,
+        [msg.tenantId, ids],
+      );
+      const byId = new Map(rows.map((r) => [String(r.wecom_user_id), String(r.name)]));
+      return ids.map((id) => byId.get(id)).filter((n): n is string => !!n);
+    } catch (err) {
+      this.logger.warn(`查询 @ 客服姓名失败：${(err as Error).message}`);
+      return [];
+    }
   }
 }
