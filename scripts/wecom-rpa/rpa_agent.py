@@ -96,19 +96,45 @@ class WecomRPAEngine:
             return True
         return False
 
+    def _is_foreground(self) -> bool:
+        handle = getattr(self.wecom_window, "NativeWindowHandle", 0)
+        return bool(handle) and ctypes.windll.user32.GetForegroundWindow() == handle
+
     def ensure_active(self) -> bool:
         if not self.wecom_window or not self.wecom_window.Exists(0, 0):
             if not self.find_wecom_window():
                 logger.warning("WeCom window not found. Please open and login WeCom PC client.")
                 return False
         try:
+            user32 = ctypes.windll.user32
             handle = getattr(self.wecom_window, "NativeWindowHandle", 0)
-            if handle:
-                ctypes.windll.user32.ShowWindow(handle, 9)  # SW_RESTORE
-                ctypes.windll.user32.SetForegroundWindow(handle)
-            else:
+            if not handle:
                 self.wecom_window.SetActive()
-            return True
+                return True
+            for _ in range(3):
+                if user32.IsIconic(handle):
+                    user32.ShowWindow(handle, 9)  # SW_RESTORE
+                else:
+                    user32.ShowWindow(handle, 5)  # SW_SHOW
+                # Windows blocks SetForegroundWindow from background processes;
+                # a synthetic Alt press lifts that restriction
+                user32.keybd_event(0x12, 0, 0, 0)
+                user32.keybd_event(0x12, 0, 2, 0)
+                user32.BringWindowToTop(handle)
+                user32.SetForegroundWindow(handle)
+                time.sleep(0.3)
+                if user32.GetForegroundWindow() == handle:
+                    return True
+                try:
+                    self.wecom_window.SetActive()
+                    self.wecom_window.SetFocus()
+                except Exception:
+                    pass
+                time.sleep(0.3)
+                if user32.GetForegroundWindow() == handle:
+                    return True
+            logger.error("Cannot bring WeCom window to foreground; skip typing to avoid pasting into another window")
+            return False
         except Exception as e:
             logger.error(f"Activate WeCom window failed: {e}")
             return False
@@ -208,15 +234,24 @@ class WecomRPAEngine:
                     auto.SendKeys("{Enter}", waitTime=0.8)
                     # search popup still in front => no chat matched; close it and fail
                     fg = ctypes.windll.user32.GetForegroundWindow()
+                    for _ in range(3):
+                        if not main_hwnd or fg == main_hwnd:
+                            break
+                        time.sleep(0.5)
+                        fg = ctypes.windll.user32.GetForegroundWindow()
                     if main_hwnd and fg and fg != main_hwnd:
+                        buf = ctypes.create_unicode_buffer(256)
+                        ctypes.windll.user32.GetWindowTextW(fg, buf, 256)
                         auto.SendKeys("{Escape}", waitTime=0.2)
                         auto.SendKeys("{Escape}", waitTime=0.2)
-                        logger.error(f"Chat not found by search: [{chat_title}]. Give the group a name and map it in RPA_ROOM_TITLES.")
+                        logger.error(f"Chat not opened after search: [{chat_title}] (foreground window: '{buf.value}')")
                         return False
                 else:
                     auto.SendKeys("{Escape}", waitTime=0.1)
 
                 # 2) focus message input box (bottom of right pane), ratios configurable
+                if not self._is_foreground() and not self.ensure_active():
+                    return False
                 self._click_ratio(float(config.get("input_x_ratio", 0.62)),
                                   float(config.get("input_y_ratio", 0.90)))
                 time.sleep(0.3)
@@ -229,7 +264,10 @@ class WecomRPAEngine:
                     auto.SendKeys(name, waitTime=float(config.get("mention_wait_sec", 1.0)))
                     auto.SendKeys("{Enter}", waitTime=0.3)
 
-                # 4) paste and send
+                # 4) paste and send (never paste unless WeCom still has focus)
+                if not self._is_foreground():
+                    logger.error("WeCom lost focus before paste; abort to avoid typing into another window")
+                    return False
                 pyperclip.copy(text)
                 auto.SendKeys("{Ctrl}v", waitTime=0.3)
                 auto.SendKeys("{Enter}", waitTime=0.2)
