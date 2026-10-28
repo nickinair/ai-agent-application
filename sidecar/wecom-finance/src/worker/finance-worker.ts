@@ -140,6 +140,12 @@ export class FinanceWorker {
   private async processItem(item: EncryptedChatData): Promise<void> {
     const decrypted: DecryptedFinanceMessage = this.crypto.decrypt(item);
 
+    // switch（切换企业）等事件没有 from 字段，不是聊天消息，直接跳过
+    if (!decrypted.from) {
+      console.log(`[FinanceWorker] 跳过无发送人的事件 (Seq=${item.seq}, MsgID=${decrypted.msgid}, 动作=${decrypted.action})`);
+      return;
+    }
+
     // 判断是否群聊以及是否外部群（外部群在企微中 roomid 通常非空）
     const isGroup = Boolean(decrypted.roomid);
     // 发送方如果是客户通常包含 wm/wo 前缀，或群 roomid 包含外部成员

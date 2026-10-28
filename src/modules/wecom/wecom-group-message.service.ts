@@ -15,6 +15,15 @@ export class WecomGroupMessageService {
   private readonly MSG_CACHE_TTL_MS = 10 * 60 * 1000;
   private readonly MAX_CACHE_SIZE = 5000;
 
+  /**
+   * 跨通道内容指纹（群 + 发送人 + 去空白正文）→ 首次到达时间。
+   * 同一条群消息会经「智能机器人长连接」和「会话存档侧车」两路到达，两路 msgid 格式不同
+   * （长连接是 32 位 hex，会话存档是 数字_时间戳），msgid 去重和 uk_channel_msg 都拦不住，
+   * 会被封成两组、回复两次。这里按内容指纹在短窗口内去重，先到的一路生效。
+   */
+  private readonly contentFingerprints = new Map<string, number>();
+  private readonly CROSS_CHANNEL_WINDOW_MS = 10_000;
+
   /** 消息收发统计指标 */
   private stats = {
     receivedCount: 0,
@@ -86,6 +95,30 @@ export class WecomGroupMessageService {
         this.processedMsgIds.delete(id);
       }
     }
+    for (const [fp, timestamp] of this.contentFingerprints.entries()) {
+      if (now - timestamp > this.CROSS_CHANNEL_WINDOW_MS) {
+        this.contentFingerprints.delete(fp);
+      }
+    }
+  }
+
+  /**
+   * 跨通道去重：同群、同发送人、同正文在窗口内只放行第一次
+   * @returns true 表示首次到达；false 表示另一通道已投递过，应忽略
+   */
+  checkAndRecordContent(chatId: string, userId: string, text: string, source: string): boolean {
+    const body = (text || '').replace(/\s+/g, '');
+    if (!chatId || !userId || !body) return true;
+    const now = Date.now();
+    this.cleanupExpiredMsgCache(now);
+    const fp = `${chatId}|${userId}|${body}`;
+    const seen = this.contentFingerprints.get(fp);
+    if (seen !== undefined && now - seen <= this.CROSS_CHANNEL_WINDOW_MS) {
+      this.logger.warn(`检测到跨通道重复消息（${source}），直接忽略: chat=${chatId}, user=${userId}, text="${text.slice(0, 30)}"`);
+      return false;
+    }
+    this.contentFingerprints.set(fp, now);
+    return true;
   }
 
   /**
@@ -274,6 +307,8 @@ export class WecomGroupMessageService {
         }
 
         const contentText = parsed.cleanedContent || parsed.content || '';
+        const isTextLike = parsed.msgType === 'text' || parsed.msgType === 'voice';
+        if (isTextLike && !this.checkAndRecordContent(channelChatId, parsed.userId, contentText, '长连接')) return;
 
         const inboundMsg: InboundMessage = {
           tenantId,
@@ -346,6 +381,10 @@ export class WecomGroupMessageService {
 
         const content = event.payload?.text?.content || event.contentSummary || '';
         const cleaned = this.cleanMentionText(content);
+        const isTextLike = event.msgtype === 'text' || event.msgtype === 'voice';
+        if (isTextLike && !this.checkAndRecordContent(event.roomid, event.sender, cleaned || content, '会话存档')) {
+          return { success: true, handled: false };
+        }
         const botId = this.env.WECOM_BOT_ID;
 
         const mentions: string[] = [];

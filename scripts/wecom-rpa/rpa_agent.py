@@ -96,43 +96,112 @@ class WecomRPAEngine:
             return True
         return False
 
+    def _is_wecom_foreground(self) -> bool:
+        if not self.wecom_window:
+            return False
+        try:
+            handle = getattr(self.wecom_window, "NativeWindowHandle", 0)
+            if not handle:
+                return False
+            fg = ctypes.windll.user32.GetForegroundWindow()
+            if not fg:
+                return False
+            if fg == handle:
+                return True
+            # Check root window ancestor (GA_ROOT = 2)
+            if ctypes.windll.user32.GetAncestor(fg, 2) == handle:
+                return True
+            # Check process ID match
+            wecom_pid = getattr(self.wecom_window, "ProcessId", 0)
+            if wecom_pid:
+                fg_pid = ctypes.c_ulong()
+                ctypes.windll.user32.GetWindowThreadProcessId(fg, ctypes.byref(fg_pid))
+                if fg_pid.value == wecom_pid:
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _is_foreground(self) -> bool:
-        handle = getattr(self.wecom_window, "NativeWindowHandle", 0)
-        return bool(handle) and ctypes.windll.user32.GetForegroundWindow() == handle
+        return self._is_wecom_foreground()
 
     def ensure_active(self) -> bool:
         if not self.wecom_window or not self.wecom_window.Exists(0, 0):
             if not self.find_wecom_window():
                 logger.warning("WeCom window not found. Please open and login WeCom PC client.")
                 return False
+        if self._is_wecom_foreground():
+            return True
+
         try:
             user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
             handle = getattr(self.wecom_window, "NativeWindowHandle", 0)
             if not handle:
                 self.wecom_window.SetActive()
                 return True
-            for _ in range(3):
-                if user32.IsIconic(handle):
-                    user32.ShowWindow(handle, 9)  # SW_RESTORE
-                else:
-                    user32.ShowWindow(handle, 5)  # SW_SHOW
-                # Windows blocks SetForegroundWindow from background processes;
-                # a synthetic Alt press lifts that restriction
-                user32.keybd_event(0x12, 0, 0, 0)
-                user32.keybd_event(0x12, 0, 2, 0)
-                user32.BringWindowToTop(handle)
-                user32.SetForegroundWindow(handle)
-                time.sleep(0.3)
-                if user32.GetForegroundWindow() == handle:
+
+            for attempt in range(4):
+                if self._is_wecom_foreground():
                     return True
+
+                # 1. AllowSetForegroundWindow
+                try:
+                    user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+                except Exception:
+                    pass
+
+                # 2. AttachThreadInput trick to bypass Windows focus restrictions
+                cur_tid = kernel32.GetCurrentThreadId()
+                fore_hwnd = user32.GetForegroundWindow()
+                fore_tid = user32.GetWindowThreadProcessId(fore_hwnd, None) if fore_hwnd else 0
+                attached = False
+                if fore_tid and fore_tid != cur_tid:
+                    attached = bool(user32.AttachThreadInput(cur_tid, fore_tid, True))
+
+                try:
+                    # 3. Simulate Alt key release to unlock foreground lock timeout
+                    user32.keybd_event(0x12, 0, 0, 0)
+                    user32.keybd_event(0x12, 0, 2, 0)
+
+                    # 4. Restore if minimized, then show
+                    if user32.IsIconic(handle):
+                        user32.ShowWindow(handle, 9)  # SW_RESTORE
+                    else:
+                        user32.ShowWindow(handle, 5)  # SW_SHOW
+
+                    # 5. Force Z-Order jump via HWND_TOPMOST (-1) then revert to HWND_NOTOPMOST (-2)
+                    SWP_FLAGS = 0x0001 | 0x0002 | 0x0040  # SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW
+                    user32.SetWindowPos(handle, -1, 0, 0, 0, 0, SWP_FLAGS)
+                    user32.SetWindowPos(handle, -2, 0, 0, 0, 0, SWP_FLAGS)
+
+                    user32.BringWindowToTop(handle)
+                    user32.SetForegroundWindow(handle)
+
+                    # 6. Call SwitchToThisWindow helper
+                    try:
+                        user32.SwitchToThisWindow(handle, True)
+                    except Exception:
+                        pass
+                finally:
+                    if attached:
+                        user32.AttachThreadInput(cur_tid, fore_tid, False)
+
+                time.sleep(0.3)
+                if self._is_wecom_foreground():
+                    return True
+
+                # 7. Fallback with uiautomation methods
                 try:
                     self.wecom_window.SetActive()
                     self.wecom_window.SetFocus()
                 except Exception:
                     pass
+
                 time.sleep(0.3)
-                if user32.GetForegroundWindow() == handle:
+                if self._is_wecom_foreground():
                     return True
+
             logger.error("Cannot bring WeCom window to foreground; skip typing to avoid pasting into another window")
             return False
         except Exception as e:
@@ -362,6 +431,20 @@ def run_http_server():
     def health():
         return jsonify({"status": "ok", "wecom_connected": engine.find_wecom_window()})
 
+    @app.route("/api/rpa/activate", methods=["GET", "POST"])
+    def handle_activate():
+        success = False
+        try:
+            with auto.UIAutomationInitializerInThread():
+                success = engine.ensure_active()
+        except Exception as e:
+            logger.error(f"Activate endpoint failed: {e}")
+        return jsonify({
+            "code": 0 if success else 500,
+            "message": "success" if success else "failed",
+            "foreground": engine._is_wecom_foreground()
+        })
+
     port = config.get("rpa_server_port", 5005)
     logger.info(f"RPA HTTP server listening on port: {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
@@ -371,6 +454,15 @@ def main():
     WindowsKeepAlive.enable()
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
+
+    # 启动时主动将企业微信激活并强行拉到最前台
+    logger.info("Bringing WeCom window to foreground...")
+    try:
+        with auto.UIAutomationInitializerInThread():
+            engine.ensure_active()
+    except Exception as e:
+        logger.warning(f"Startup activation failed: {e}")
+
     engine.loop()
 
 
