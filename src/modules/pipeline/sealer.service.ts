@@ -146,6 +146,7 @@ export class SealerService implements ISealer, OnModuleInit {
         senderRole: (m.sender_role as any) || 'CUSTOMER',
         text: m.content || '',
         sentAt: m.sent_at.getTime(),
+        msgType: m.msg_type,
         mediaUrl: m.media_url,
       }));
 

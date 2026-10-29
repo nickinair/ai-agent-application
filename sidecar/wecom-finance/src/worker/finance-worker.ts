@@ -8,6 +8,7 @@ import {
   InboundFinanceEvent,
 } from '../types/finance.types';
 import { HttpDispatcher } from '../dispatcher/http-dispatcher';
+import { saveMedia } from '../media/media-saver';
 
 export type FinanceMessageHandler = (event: InboundFinanceEvent) => Promise<void> | void;
 
@@ -173,6 +174,12 @@ export class FinanceWorker {
       payload: decrypted,
     };
 
+    // 图片：用 sdkfileid 拉取原图存入共享媒体卷，供核心服务看图；失败只记日志，消息照常投递。
+    // A3 只把群聊消息送进流水线，单聊图片不拉。
+    if (decrypted.msgtype === 'image' && isGroup) {
+      event.media = await this.fetchImage(decrypted);
+    }
+
     if (this.dispatcher) {
       await this.dispatcher.dispatch(event);
       console.log(`[FinanceWorker] 成功投递事件至 a3 (Seq=${item.seq}, MsgID=${decrypted.msgid})`);
@@ -180,6 +187,24 @@ export class FinanceWorker {
 
     if (this.messageHandler) {
       await this.messageHandler(event);
+    }
+  }
+
+  /**
+   * 拉取并保存图片；未配置媒体目录、驱动不支持或拉取失败时返回 undefined
+   */
+  private async fetchImage(msg: DecryptedFinanceMessage): Promise<InboundFinanceEvent['media']> {
+    const sdkfileid = (msg as any).image?.sdkfileid as string | undefined;
+    if (!this.config.mediaDir || !sdkfileid || typeof this.driver.fetchMedia !== 'function') return undefined;
+    const started = Date.now();
+    try {
+      const buf = await this.driver.fetchMedia(sdkfileid, 10);
+      const saved = saveMedia(this.config.mediaDir, buf);
+      console.log(`[FinanceWorker] 图片已保存 (MsgID=${msg.msgid}, key=${saved.key}, ${saved.size}B, ${Date.now() - started}ms)`);
+      return saved;
+    } catch (err: any) {
+      console.warn(`[FinanceWorker] 图片拉取失败 (MsgID=${msg.msgid}): ${err.message}`);
+      return undefined;
     }
   }
 

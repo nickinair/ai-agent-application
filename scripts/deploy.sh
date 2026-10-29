@@ -34,6 +34,15 @@ A3_DIR="${ROOT_DIR}"
 FIN_DIR="${ROOT_DIR}/sidecar/wecom-finance"
 # Agent 核心服务（crm-ai-agent 仓库，与本仓库放在同一目录下）
 CORE_DIR="${CORE_DIR:-$(cd "${ROOT_DIR}/.." && pwd)/crm-ai-agent}"
+# 共享媒体卷宿主机目录（图片识别 P1/P2，供 A3、会话存档与核心服务共享）
+MEDIA_HOST_DIR="${MEDIA_HOST_DIR:-$(cd "${ROOT_DIR}/.." && pwd)/data/media}"
+
+ensure_media_dir() {
+  mkdir -p "${MEDIA_HOST_DIR}/bot" "${MEDIA_HOST_DIR}/fin"
+  chmod -R 777 "${MEDIA_HOST_DIR}" 2>/dev/null || true
+  # 清理超过 90 天的历史图片缓存
+  find "${MEDIA_HOST_DIR}" -type f -mtime +90 -delete 2>/dev/null || true
+}
 
 # 参数默认值
 ACTION=""
@@ -847,6 +856,7 @@ deploy_core() {
   build_image_core
   check_same_redis
   stop_single_container "$CORE_CONTAINER"
+  ensure_media_dir
 
   local core_env_file
   core_env_file="$(pick_env_file "$CORE_DIR")"
@@ -880,6 +890,8 @@ deploy_core() {
     -e "PORT=3001" \
     -e "TURN_QUEUE_ENABLED=true" \
     -e "PIPELINE_DIRECT=false" \
+    -e "MEDIA_DIR=/data/media" \
+    -v "${MEDIA_HOST_DIR}:/data/media:ro" \
     "${mw_opts[@]}" \
     "${env_opts[@]}" \
     "$CORE_IMAGE"
@@ -892,6 +904,7 @@ deploy_a3() {
   info "==> 开始部署 A3 主应用: ${A3_CONTAINER} (端口: ${A3_PORT})"
   build_image_a3
   stop_single_container "$A3_CONTAINER"
+  ensure_media_dir
 
   local env_opts=()
   if [[ -f "${A3_DIR}/.env.${ENV}.local" ]]; then
@@ -955,6 +968,8 @@ deploy_a3() {
     -e "PORT=3002" \
     -e "GATEWAY_ENABLED=true" \
     -e "GATEWAY_URL=http://a3-gateway:3003" \
+    -e "MEDIA_DIR=/data/media" \
+    -v "${MEDIA_HOST_DIR}:/data/media" \
     "${mysql_opts[@]}" \
     "${redis_opts[@]}" \
     "${env_opts[@]}" \
@@ -970,6 +985,7 @@ deploy_finance() {
   stop_single_container "$FIN_CONTAINER"
 
   mkdir -p "${FIN_DIR}/data" "${FIN_DIR}/keys" "${FIN_DIR}/lib"
+  ensure_media_dir
 
   local env_opts=()
   if [[ -f "${FIN_DIR}/.env.${ENV}" ]]; then
@@ -988,9 +1004,11 @@ deploy_finance() {
     -e "GATEWAY_ENABLED=true" \
     -e "GATEWAY_URL=http://a3-gateway:3003" \
     -e "A3_WEBHOOK_URL=http://a3-app:3002/api/admin/wecom/finance-inbound" \
+    -e "MEDIA_DIR=/data/media" \
     -v "${FIN_DIR}/data:/app/data" \
     -v "${FIN_DIR}/keys:/app/keys" \
     -v "${FIN_DIR}/lib:/app/lib" \
+    -v "${MEDIA_HOST_DIR}:/data/media" \
     "${env_opts[@]}" \
     "$FIN_IMAGE"
 

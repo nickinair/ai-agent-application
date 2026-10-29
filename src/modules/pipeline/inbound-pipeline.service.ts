@@ -266,8 +266,8 @@ export class InboundPipelineService {
       INSERT INTO message (
         tenant_id, conversation_id, channel, channel_msg_id,
         sender_role, sender_channel_user_id, sender_name,
-        msg_type, content, media_url, sent_at, received_at
-      ) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))
+        msg_type, content, media_url, media_md5, sent_at, received_at
+      ) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))
     `;
 
     try {
@@ -281,6 +281,7 @@ export class InboundPipelineService {
         msg.type,
         msg.text || null,
         msg.mediaUrl || null,
+        msg.mediaMd5 || null,
         new Date(msg.sentAt),
       ]);
       return { success: true, messageId: res.insertId };

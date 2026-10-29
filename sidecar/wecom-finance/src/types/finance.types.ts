@@ -174,6 +174,16 @@ export interface InboundFinanceEvent {
   msgtype: string;
   contentSummary: string;
   payload: DecryptedFinanceMessage;
+  /** 图片已拉取并存入共享媒体卷时带上（key 相对 MEDIA_DIR，A3 记为 media://key） */
+  media?: SavedMediaRef;
+}
+
+/** 已保存到共享媒体卷的文件引用 */
+export interface SavedMediaRef {
+  key: string;
+  md5: string;
+  size: number;
+  mime: string;
 }
 
 /**
@@ -189,6 +199,8 @@ export interface FinanceSidecarConfig {
   batchSize: number;
   cursorStoragePath: string;
   cSdkLibPath?: string;
+  /** 共享媒体卷目录（与 A3、核心服务共用）；不配则不拉取图片 */
+  mediaDir?: string;
   a3WebhookUrl?: string;
   a3WebhookSecret?: string;
   gatewayUrl?: string;

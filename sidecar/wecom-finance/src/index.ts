@@ -86,6 +86,7 @@ function loadConfig(): FinanceSidecarConfig {
     batchSize: parseInt(process.env.BATCH_SIZE || '100', 10),
     cursorStoragePath: process.env.CURSOR_STORAGE_PATH || './data/seq.cursor',
     cSdkLibPath: process.env.WECOM_C_SDK_LIB_PATH,
+    mediaDir: process.env.MEDIA_DIR || undefined,
     a3WebhookUrl: process.env.A3_WEBHOOK_URL,
     a3WebhookSecret: process.env.A3_WEBHOOK_SECRET,
     gatewayUrl: process.env.GATEWAY_URL || 'http://localhost:3003',

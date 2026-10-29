@@ -5,6 +5,7 @@ import { InboundPipelineService } from '../pipeline/inbound-pipeline.service';
 import { WecomMemberRoleService } from './wecom-member-role.service';
 import type { InboundMessage } from '../../contracts';
 import type { WecomIncomingMessage } from './types/wecom.types';
+import { MEDIA_SCHEME, saveMedia, type SavedMedia } from './media-store';
 
 @Injectable()
 export class WecomGroupMessageService {
@@ -228,9 +229,10 @@ export class WecomGroupMessageService {
   logIncomingMessage(msg: WecomIncomingMessage): void {
     const isGroup = msg.chatType === 'group';
     const targetLabel = isGroup ? `群聊 ID=${msg.chatId}` : '单聊';
+    // requiresHumanHandoff 只是"非文本媒体"标记，不会触发转人工；图片由核心服务看图处理
     const handoffLabel = msg.requiresHumanHandoff
-      ? '🛎️ [转人工介入处理]'
-      : '🤖 [智能消息处理]';
+      ? '🖼️ [媒体消息]'
+      : '🤖 [文本消息]';
 
     const lines: string[] = [
       `📩 收到企业微信消息 [类型=${msg.msgType.toUpperCase()}] [${targetLabel}] [用户=${msg.userId}] [MsgID=${msg.msgId}] ${handoffLabel}`,
@@ -310,6 +312,10 @@ export class WecomGroupMessageService {
         const isTextLike = parsed.msgType === 'text' || parsed.msgType === 'voice';
         if (isTextLike && !this.checkAndRecordContent(channelChatId, parsed.userId, contentText, '长连接')) return;
 
+        // 图片：长连接给的是加密临时链接（约 5 分钟失效），入站时立即下载解密存入共享媒体卷
+        const media = parsed.msgType === 'image' ? await this.downloadImage(client, frame) : undefined;
+        if (media && !this.checkAndRecordContent(channelChatId, parsed.userId, `img:${media.md5}`, '长连接图片')) return;
+
         const inboundMsg: InboundMessage = {
           tenantId,
           channel: 'wecom_group',
@@ -323,7 +329,8 @@ export class WecomGroupMessageService {
           mentions,
           type: (parsed.msgType === 'mixed' ? 'other' : parsed.msgType) as any,
           text: contentText,
-          mediaUrl: parsed.mediaInfo?.url,
+          mediaUrl: media?.url ?? parsed.mediaInfo?.url,
+          mediaMd5: media?.md5,
           sentAt: parsed.createTime || Date.now(),
         };
         await this.pipelineService.onInbound(inboundMsg);
@@ -385,6 +392,11 @@ export class WecomGroupMessageService {
         if (isTextLike && !this.checkAndRecordContent(event.roomid, event.sender, cleaned || content, '会话存档')) {
           return { success: true, handled: false };
         }
+        const isImage = event.msgtype === 'image';
+        const imageMd5 = isImage ? (event.media?.md5 || event.payload?.image?.md5sum) : undefined;
+        if (imageMd5 && !this.checkAndRecordContent(event.roomid, event.sender, `img:${imageMd5}`, '会话存档图片')) {
+          return { success: true, handled: false };
+        }
         const botId = this.env.WECOM_BOT_ID;
 
         const mentions: string[] = [];
@@ -412,8 +424,10 @@ export class WecomGroupMessageService {
             channelUserId: event.sender,
           },
           mentions,
-          type: (event.msgtype === 'text' ? 'text' : event.msgtype === 'voice' ? 'voice' : 'other') as any,
-          text: cleaned || content,
+          type: (event.msgtype === 'text' ? 'text' : event.msgtype === 'voice' ? 'voice' : isImage ? 'image' : 'other') as any,
+          text: isImage ? '[图片]' : cleaned || content,
+          mediaUrl: isImage && event.media?.key ? `${MEDIA_SCHEME}${event.media.key}` : undefined,
+          mediaMd5: imageMd5,
           sentAt: event.timestamp || Date.now(),
         };
 
@@ -424,6 +438,29 @@ export class WecomGroupMessageService {
     }
 
     return { success: true, handled: true };
+  }
+
+  /**
+   * 下载并解密长连接图片（SDK 内置 AES-256-CBC，每条消息自带 aeskey），存入共享媒体卷。
+   * 未配置 MEDIA_DIR、超过大小上限或下载失败时返回 undefined，消息照常以 [图片] 占位投递。
+   */
+  async downloadImage(client: WSClient, frame: WsFrame<BaseMessage>): Promise<SavedMedia | undefined> {
+    const image = (frame.body as any)?.image as { url?: string; aeskey?: string } | undefined;
+    if (!this.env.MEDIA_DIR || !image?.url) return undefined;
+    const started = Date.now();
+    try {
+      const { buffer } = await client.downloadFile(image.url, image.aeskey);
+      if (buffer.length > (this.env.MEDIA_MAX_BYTES ?? 10 * 1024 * 1024)) {
+        this.logger.warn(`图片超过大小上限（${buffer.length}B），不保存`);
+        return undefined;
+      }
+      const saved = saveMedia(this.env.MEDIA_DIR, buffer);
+      this.logger.log(`图片已保存: key=${saved.key}, ${saved.size}B, ${Date.now() - started}ms`);
+      return saved;
+    } catch (err: any) {
+      this.logger.warn(`图片下载解密失败: ${err.message}`);
+      return undefined;
+    }
   }
 
   /**

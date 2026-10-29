@@ -19,6 +19,13 @@ export interface IFinanceDriver {
   fetchChatData(seq: number, limit: number, timeout?: number): Promise<EncryptedChatData[]>;
 
   /**
+   * 按 sdkfileid 拉取媒体文件（图片 / 语音 / 文件）的完整二进制；驱动不支持时不实现
+   * @param sdkfileid 消息体里的 sdkfileid
+   * @param timeout 单次分片拉取超时（秒）
+   */
+  fetchMedia?(sdkfileid: string, timeout?: number): Promise<Buffer>;
+
+  /**
    * 销毁释放驱动资源
    */
   destroy(): Promise<void>;

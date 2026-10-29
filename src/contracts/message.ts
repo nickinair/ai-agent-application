@@ -85,7 +85,7 @@ export interface InboundMessage {
 
   /**
    * 消息的物理内容类型
-   * 业务边界：V1.0.0 核心主干仅对文本进行意图理解与问答；纯图片在封组时触发专用引导话术回复
+   * 业务边界：文本 / 语音（企微已转写）直接理解；图片由核心服务「看图」转成文字描述后并入组文本
    */
   type: MessageType;
 
@@ -96,10 +96,17 @@ export interface InboundMessage {
   text?: string;
 
   /**
-   * 富媒体文件转存至云对象存储（COS/OSS）后的公开可访问 URL
-   * 业务边界：纯文本消息为 undefined；图片/语音/文件在进入核心处理前必须完成异步转存
+   * 富媒体文件的存放位置
+   * 业务边界：纯文本消息为 undefined；图片在入站时已下载解密并存入共享媒体卷，记为 media://{key}
+   * （key 相对 MEDIA_DIR），核心服务据此读图看图；未能转存时可能是渠道临时链接或为空
    */
   mediaUrl?: string;
+
+  /**
+   * 媒体文件 MD5（小写 hex）
+   * 业务边界：跨通道图片去重、看图结果缓存的键；未转存时为 undefined
+   */
+  mediaMd5?: string;
 
   /**
    * 渠道侧记录的消息生成时间戳（毫秒）
@@ -237,4 +244,14 @@ export interface MessageRef {
    * 渠道发送时间戳（毫秒）
    */
   sentAt: number;
+
+  /**
+   * 消息类型（text / image / voice ...），核心服务按此找出组内图片
+   */
+  msgType?: string;
+
+  /**
+   * 媒体存放位置（media://{key}，见 InboundMessage.mediaUrl）
+   */
+  mediaUrl?: string | null;
 }

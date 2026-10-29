@@ -29,9 +29,11 @@ export interface InboundFinanceEventDto {
     msgtype: string;
     text?: { content: string };
     voice?: { play_length: number; voice_size: number; sdkfileid?: string };
-    image?: { filesize: number; sdkfileid?: string };
+    image?: { filesize: number; sdkfileid?: string; md5sum?: string };
     file?: { filename: string; filesize: number; sdkfileid?: string };
     mixed?: { item: Array<{ type: string; content: string }> };
     [key: string]: any;
   };
+  /** 侧车已拉取并存入共享媒体卷的图片（key 相对 MEDIA_DIR） */
+  media?: { key: string; md5: string; size: number; mime: string };
 }

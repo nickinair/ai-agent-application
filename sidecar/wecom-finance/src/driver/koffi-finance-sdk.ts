@@ -29,6 +29,15 @@ export class KoffiFinanceSdk {
   private fnGetChatData: any = null;
   private fnDecryptData: any = null;
   private fnDestroySdk: any = null;
+  // 媒体拉取（GetMediaData 及 MediaData_t 访问器）
+  private fnNewMediaData: any = null;
+  private fnFreeMediaData: any = null;
+  private fnGetOutIndexBuf: any = null;
+  private fnGetData: any = null;
+  private fnGetDataLen: any = null;
+  private fnIsMediaDataFinish: any = null;
+  private fnGetMediaData: any = null;
+  private koffi: any = null;
 
   constructor(options: KoffiFinanceSdkOptions) {
     this.libPath = path.resolve(options.libPath);
@@ -75,6 +84,14 @@ export class KoffiFinanceSdk {
       ]);
       this.fnDecryptData = this.koffiLib.func('DecryptData', 'int', ['str', 'str', 'void*']);
       this.fnDestroySdk = this.koffiLib.func('DestroySdk', 'void', ['void*']);
+      this.fnNewMediaData = this.koffiLib.func('NewMediaData', 'void*', []);
+      this.fnFreeMediaData = this.koffiLib.func('FreeMediaData', 'void', ['void*']);
+      this.fnGetOutIndexBuf = this.koffiLib.func('GetOutIndexBuf', 'str', ['void*']);
+      this.fnGetData = this.koffiLib.func('GetData', 'void*', ['void*']);
+      this.fnGetDataLen = this.koffiLib.func('GetDataLen', 'int', ['void*']);
+      this.fnIsMediaDataFinish = this.koffiLib.func('IsMediaDataFinish', 'int', ['void*']);
+      this.fnGetMediaData = this.koffiLib.func('GetMediaData', 'int', ['void*', 'str', 'str', 'str', 'str', 'int', 'void*']);
+      this.koffi = koffi;
 
       // 1. 创建 SDK 句柄
       this.sdkHandle = this.fnNewSdk();
@@ -193,6 +210,47 @@ export class KoffiFinanceSdk {
         }
       }
     }
+  }
+
+  /**
+   * 调用 C 函数 GetMediaData 按分片拉取媒体文件（官方示例：每片新建 MediaData_t，用 outindexbuf 续拉，直到 IsMediaDataFinish）
+   * @param sdkfileid 消息体里的 sdkfileid
+   * @param timeout 单片超时秒数
+   * @param maxBytes 超过这个大小就放弃，避免大文件卡住拉取循环
+   */
+  public getMediaData(sdkfileid: string, timeout: number = 10, maxBytes: number = 20 * 1024 * 1024): Buffer {
+    if (!this.sdkHandle || !this.fnGetMediaData) {
+      throw new Error('[KoffiFinanceSdk] SDK 尚未初始化或不支持 GetMediaData');
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let indexBuf = '';
+    for (let round = 0; round < 1000; round++) {
+      const media = this.fnNewMediaData();
+      if (!media) throw new Error('[KoffiFinanceSdk] NewMediaData 返回空指针');
+      try {
+        const ret = this.fnGetMediaData(this.sdkHandle, indexBuf, sdkfileid, '', '', timeout, media);
+        if (ret !== 0) throw new Error(`GetMediaData 失败，企微 C 接口返回码: ${ret}`);
+        const len = this.fnGetDataLen(media);
+        if (len > 0) {
+          // 必须在 FreeMediaData 之前把 C 缓冲区拷贝成 JS Buffer
+          const bytes = this.koffi.decode(this.fnGetData(media), 'uint8', len) as number[] | Uint8Array;
+          const chunk = Buffer.from(bytes as Uint8Array);
+          chunks.push(chunk);
+          total += chunk.length;
+          if (total > maxBytes) throw new Error(`媒体文件超过 ${maxBytes} 字节，放弃拉取`);
+        }
+        if (this.fnIsMediaDataFinish(media) === 1) return Buffer.concat(chunks, total);
+        indexBuf = this.fnGetOutIndexBuf(media) || '';
+      } finally {
+        try {
+          this.fnFreeMediaData(media);
+        } catch (freeErr: any) {
+          console.warn(`[KoffiFinanceSdk] 释放 MediaData 内存警告: ${freeErr.message}`);
+        }
+      }
+    }
+    throw new Error('GetMediaData 分片次数异常，已中止');
   }
 
   /**
