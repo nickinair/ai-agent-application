@@ -1257,7 +1257,7 @@ start_containers() {
 # ==============================================================================
 
 get_ssh_opts() {
-  local opts=(-p "${REMOTE_PORT}" -o "StrictHostKeyChecking=no" -o "ConnectTimeout=10")
+  local opts=(-p "${REMOTE_PORT}" -o "StrictHostKeyChecking=no" -o "ConnectTimeout=15" -o "ServerAliveInterval=30" -o "ServerAliveCountMax=5")
   if [[ -n "${SSH_KEY}" ]]; then
     opts+=(-i "${SSH_KEY}")
   fi
