@@ -325,20 +325,26 @@ class WecomRPAEngine:
                                   float(config.get("input_y_ratio", 0.90)))
                 time.sleep(0.3)
 
-                # 3) real @mentions: type '@'+name to open the member picker, Enter selects
-                for name in (mentions or []):
-                    if not name:
-                        continue
-                    auto.SendKeys("@", waitTime=0.3)
-                    auto.SendKeys(name, waitTime=float(config.get("mention_wait_sec", 1.0)))
-                    auto.SendKeys("{Enter}", waitTime=0.3)
-
-                # 4) paste and send (never paste unless WeCom still has focus)
+                # 3) paste text first: answer customer's questions first (never paste unless WeCom still has focus)
                 if not self._is_foreground():
                     logger.error("WeCom lost focus before paste; abort to avoid typing into another window")
                     return False
                 pyperclip.copy(text)
                 auto.SendKeys("{Ctrl}v", waitTime=0.3)
+
+                # 4) real @mentions at the end: type '@'+name to open member picker, Enter selects
+                first_mention = True
+                for name in (mentions or []):
+                    if not name:
+                        continue
+                    if first_mention and not text.endswith("\n") and not text.endswith(" "):
+                        auto.SendKeys(" ", waitTime=0.1)
+                    auto.SendKeys("@", waitTime=0.3)
+                    auto.SendKeys(name, waitTime=float(config.get("mention_wait_sec", 1.0)))
+                    auto.SendKeys("{Enter}", waitTime=0.3)
+                    first_mention = False
+
+                # 5) send
                 auto.SendKeys("{Enter}", waitTime=0.2)
                 logger.info(f"Sent reply to [{chat_title}]: {text[:30]}...")
                 return True
